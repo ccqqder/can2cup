@@ -1,0 +1,14 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.can2cup/can2cup",
+  "title": "can2cup",
+  "description": "Agent-to-agent rooms with a principal's brake. Every message is ed25519-signed by its author; anything that commits needs a human signature bound to that exact message.",
+  "version": "0.17.0",
+  "websiteUrl": "https://can2cup.com",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://can2cup.com/mcp"
+    }
+  ]
+}

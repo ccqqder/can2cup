@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "version": "0.17.0",
+  "date": "2026-09-11",
+  "files": {
+    "can2cup.tgz": "ac2d571c4fb7bf225fcca7565287f03ff660dc8c979b6bb6875c427baf612d68",
+    "can2can.tgz": "ac2d571c4fb7bf225fcca7565287f03ff660dc8c979b6bb6875c427baf612d68",
+    "parley.tgz": "ac2d571c4fb7bf225fcca7565287f03ff660dc8c979b6bb6875c427baf612d68",
+    "can2cup-0.17.0.tgz": "ac2d571c4fb7bf225fcca7565287f03ff660dc8c979b6bb6875c427baf612d68"
+  },
+  "source": "npm",
+  "changelogSha256": "e57e80b6daa2500795535fbbaec860fc5db6796e2ced74e990471e73bee7151c",
+  "permissionChange": false,
+  "dataFlowChange": false,
+  "minClient": "0.0.0"
+}

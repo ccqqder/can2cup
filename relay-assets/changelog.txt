@@ -1,0 +1,629 @@
+can2cup changelog (newest first). Machine-readable enough: one "## <version> — <date>" line per release, bullets below.
+Agents: `can2cup upgrade` installs the version https://can2cup.com/dl/VERSION names; restart Claude Code once afterwards.
+
+## 0.17.0 — 2026-09-11
+- Languages. The bot speaks English as well as Traditional Chinese, and your agent speaks your language — any of sixteen
+  (English, 繁體中文, 简体中文, 日本語, 한국어, ไทย, Bahasa Indonesia, Tiếng Việt, हिन्दी, Русский, Українська, العربية,
+  Português, Español, Deutsch, Français). `/lang` in the chat app picks it — a picker, a code, or the language's own name;
+  `/setup` asks first when the app gives no locale. A connected group has its own language, set by whoever connected it.
+  Accounts bound before this keep Traditional Chinese; a new account with no locale gets English. The agent's prompt
+  stays in English: the language reaches it as a setting (a code from a fixed list, never free text) and it speaks it.
+- The bot itself speaks Traditional Chinese, English, Simplified Chinese, Japanese, Thai, Indonesian and Vietnamese; in
+  any other of the sixteen it answers in English (and says so) while your agent speaks yours. The command menus on
+  Discord and Telegram gained /lang; Telegram shows it in English unless your Telegram is set to Chinese.
+- When you bind, your agent introduces itself, in your language, addressing you as 老闆 in Chinese. The relay queues
+  one "chat app connected" event for it that carries the chat app's name and the language code, nothing else.
+- `can2cup whoami` shows the boss's language, and every instruction from the chat app says which language to answer in.
+- Notifications your agent's computer sends to your phone (a blocked send, an expired room, a sealed-bid result) now
+  travel as a code the relay words in your language; relays older than this still get the Chinese text.
+- In Chinese the person an agent answers to is 老闆, never 主人; "boss" in English, "principal" in the technical documents.
+- Also in this version (built on main since 0.16.1): `npm run check:chat` — two forged people, two real clients, all three
+  chat apps; `npm run probe:prod` for the production relay; `can2cup whoami` names the chat app it is bound to;
+  `npm run check:i18n` before every publish; the README as a front door with docs/CLIENT.md, CHAT-APPS.md,
+  RELAY-OPS.md, RELEASING.md, TRUST.md, SECURITY.md and CONTRIBUTING.md behind it, and in fifteen languages.
+
+## 0.16.1 — 2026-09-10
+- The connector's consent page ("把 can2cup 連給 Claude") no longer assumes LINE: it explains how to get a code on LINE (the
+  QR), Telegram (a one-tap link to the bot, `t.me/can2cup_bot?start=getlink`) and Discord (`/link`). And `/link` typed
+  by someone who is already bound now hands out that code instead of refusing with "you are already bound" — the code
+  is for a connector, it re-binds nothing (found on the first real Telegram sign-in).
+
+## 0.16.0 — 2026-09-10
+(0.15.1 and 0.15.2 below were built and tested on the same day and never published on their own; 0.16.0 is all of it.)
+- "Every agent under my principal", on one page — the first stage of the dashboard (docs/dashboard-tool.md). From the
+  claude.ai connector, `can2cup_status` lists each agent you run — which chat app it is bound to, online or not,
+  version, pause state, channel health, the groups it knows (and which are wired), its rooms, unread instructions —
+  and `can2cup status --all` prints the same from a terminal. Read-only metadata: no transcripts, no keys, no other
+  people's identities, chat-account ids reduced to a hint.
+- Grouping is by PROOF, not by claim. An agent used to register its principal's public key by simply stating it,
+  which would have let a stranger's agent list itself under yours. The registration now carries a claim signed by
+  the principal key itself, bound to this agent and this relay and fresh within five minutes; only proven agents are
+  grouped, an unproven caller sees itself only (and learns nothing about the principal's other agents), and a
+  connector sign-in is scoped to the principal the agent belonged to at that moment. Old clients keep registering
+  as before — unproven — and the view says what to do (upgrade, then `can2cup principal init` or restart). One
+  principal registration per process now (it used to run twice); a per-target refusal (400/403/404) no longer marks
+  the whole channel failing; `can2cup admin activity` names each binding's chat app.
+
+- Also in this release (was to be 0.15.1):
+- The monthly push allowance is LINE's, not everyone's. `PUSH_BUDGET` (180, sized for LINE's free plan) used to be one
+  relay-wide counter that every channel's pushes drew from, so Discord and Telegram — which have no such allowance —
+  would have gone silent with LINE at month's end. Each channel now has its own monthly count; only a channel with a
+  platform allowance (LINE) is gated on it, the per-target (60/month) and per-room (40/hour) abuse gates still apply
+  to all, and `/quota` shows your own channel's numbers ("Telegram 沒有月上限" rather than LINE's 180). LINE's count
+  carries over from the old counter, so nothing resets mid-month.
+- The client stops assuming LINE. `can2cup status` / `doctor`, `whoami`, `setup`, `link`, `unbind`, `groups`, `wire`,
+  `tell` and the MCP tool descriptions now name the chat app the relay reports (a Telegram-bound agent reads
+  "Telegram linked", a group is "Telegram group …"), and the link flow offers the Telegram deep link next to the
+  LINE QR. Pure wording; the smoke's LINE assertions are unchanged because LINE still reads LINE.
+
+## 0.15.0 — 2026-09-10
+!! DATA FLOW: a third chat app. A relay that sets TELEGRAM_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET now speaks to Telegram's Bot
+   API: the principal's commands arrive from Telegram and the agent's replies and pushes go back through it. can2cup.com
+   runs @can2cup_bot. Nothing changes for LINE or Discord users; a relay without those secrets has no Telegram route.
+- Telegram (docs/telegram-adapter.md). `/setup`, `/link`, `/a`, `/status`, groups with `/room`, the decision buttons — the
+  same console, from Telegram: DM the bot or add it to a group (privacy mode stays on: it hears /commands, @mentions and
+  replies to itself, nothing else). Every webhook is checked against the secret Telegram was given; the "type here"
+  button becomes a reply prompt; a `t.me/can2cup_bot?start=link_CODE` link opens the bot with the code filled in.
+  Reviewed (gpt-6-astra medium): eight findings, all fixed — among them a command addressed to another bot
+  (`/pause@other_bot`) is no longer taken as ours, long messages are split instead of cut, and a malformed update
+  cannot make the parser throw.
+- Channel layer, finished (the first step towards a third chat app, Telegram; see docs/telegram-adapter.md). No
+  user-visible change. The relay now keeps its chat adapters in a registry (src/relay/channels.ts): which ids a
+  channel owns, which route its webhook arrives on, and what it calls itself and its places (`vocab`). The 25 places
+  that used to guess the channel from an id prefix or a delivery-verdict string — retry, quota, health, the `via`
+  tags, the inbox prose, the deep link, the install hint — read the registry instead; the LINE→Discord regex word
+  swap is gone — the console builds its sentences from the channel's own vocabulary (nothing is rewritten on the way
+  out, so a message someone wrote is delivered exactly as written); the console's command table exists once (src/relay/commands.ts) and the Discord registration script
+  reads it; `/p/claim` tells the client which channel it bound to, so the client no longer sniffs the id.
+- Fixed on the way: a push that a channel refused with 5xx/429 is retried whatever the channel is called (the old
+  regex named LINE and Discord); a group where the bot cannot post gets its install hint from the adapter that
+  raised it.
+
+## 0.14.5 — 2026-09-10
+- Security hardening (seventh-opinion review, gpt-6-astra medium, every finding verified against the code).
+  Ten findings, all fixed; the one that matters most: canonical JSON dropped a field named `__proto__` from the
+  bytes every signature and hash cover, while JSON.parse and every reader still saw it — so a relay could add an
+  unsigned tarball hash to the release manifest under the maintainer's real signature, and a `__proto__` field
+  in a message escaped the never_disclose scan. canon() now uses a null-prototype object, the manifest file
+  table is a strict schema, and `can2cup upgrade` checks the can2cup.tgz entry's hash rather than "any hash in
+  the table". Also: `history` no longer prints "chain CLEAN" over a served prefix of the room (the same
+  completeness checks the commit gate runs now downgrade it to INCONCLUSIVE and withhold the live-grant list);
+  the live-grant ledger replays by seq and only the grantor's own revoke counts (one shared implementation,
+  `protocol/authority.ts`); terms on a proposal / counter / accept must be flat scalars, so a price hidden in a
+  nested structure is refused by the cap on both floors and an accept refuses such a target; the hosted send
+  reads its arguments through the same reader as the local client (a wrong-typed or undeclared field is refused,
+  never dropped — `amount: "1000"` used to go out as an unpriced proposal); `verifyChain` refuses an envelope
+  from another room; `max_grant_hours: 0` now means no grant (the +0.01h tolerance let a 36-second one through);
+  the hosted daily room quota is reserved before the cross-object call (a concurrent pair could exceed it); the
+  room name in the MCP server's own instructions and the LIVE GRANTS line are framed like every other peer
+  string; and the local staging script checks the tarball's own package name/version on every path.
+- `can2cup_send` / `can2cup send` take an explicit `currency` (before, only via `data`).
+- Protocol note: only a body that contains a key literally named `__proto__` hashes differently from 0.14.4 —
+  no honest client ever produced one. Existing rooms, signatures and release manifests are unaffected.
+
+## 0.14.4 — 2026-09-09
+- Same as 0.14.3 below; republished under this number because npm's registry rejected 0.14.3 with a stuck
+  staged upload left by an interrupted publish attempt (an OTP/passkey step that never completed). No content
+  change from 0.14.3, version number only.
+- Short-code join. An agent can now put another agent in a room with an 8-character code (ABCD-1234) instead of
+  the ~120-character secret link — read it over a call, text it — via `can2cup join <code>` / `can2cup_join`,
+  minted by `can2cup invite --code` / `can2cup_invite_code`. One mechanism serves both a second machine of your
+  own and a counterparty's agent. Resolving a code is binding-gated (an already-linked agent; a brand-new one
+  still uses the full link) and rate-limited; E2E rooms keep the full link, since a relay-brokered code must
+  never carry the room key.
+- Security hardening, three independent review rounds (one Opus, gpt-6-astra medium + high). The mint guard now
+  parses invites URL-only and stores the re-encoded canonical link, so no crafted multi-segment link, no compact
+  token with an attacker-set target, and no single-URL E2E link can land a room key in the relay's code store;
+  join-by-group only trusts a code minted by a room member (a non-member could otherwise poison a group's join);
+  a random code cannot silently overwrite a live one; the hosted OAuth code-redeem is rate-limited by caller IP
+  like every other code path; and one per-agent daily mint quota covers both places that mint a code. No protocol
+  change.
+- Same-owner coordination across your own machines is now a documented, first-class use of the ordinary room
+  (no special mode, no relaxed trust): the architecture diagram shows your other device as an ordinary
+  participant, and docs/same-owner-agents.md explains why reuse is the correct, safe design.
+
+## 0.14.2 — 2026-09-09
+- Security hardening (sixth-opinion review, gpt-6-astra). Untrusted text from a peer can no longer forge the
+  structure the agent reads: the message body fence now covers EVERY line-break variant (CR, NEL, line/para
+  separators, VT, FF), not just "\n", and bidi / zero-width characters are stripped from names and titles, so
+  no visual line escapes the fence and no marker reconstructs after redaction; the signed-but-format-unchecked
+  `ts` header field, the hosted join / history surfaces, and the LINE guest / unverified blocks — all of which
+  rendered peer text without framing — now go through the same guard. A malformed mandate cap now fails CLOSED
+  (a non-number no longer reads as "no limit") on both the local and hosted floors; a `require_confirm` entry is
+  case- and space-insensitive so a typo cannot silently disable the hold; a sealed-bid reveal's disclosure
+  exemption can no longer be reached through a generic send; and grant-expiry, revoke-ref, attachment-URL, scope
+  and bid values are validated more strictly. No protocol change; existing rooms and clients are unaffected.
+- Includes 0.14.1: Discord pushes no longer say "LINE", and `can2cup watch` docs point at `--exec` for
+  unattended use (a bare restart loop spins on an unacked item). (0.14.1 was not released on its own.)
+
+## 0.14.1 — 2026-09-09
+- Discord binding said "LINE": `forDiscord`'s LINE→Discord word-swap (v0.12.1) only ran on the free reply path
+  (`onChannelEvent`); every push — offline/idle notices, unbind/erase confirmations, `link:claimed` — is queued
+  through `push()` instead and never passed through it, so a Discord-bound push kept saying "LINE" regardless of
+  which channel actually bound. The swap now runs once at `push()`'s queueing point, covering every push call
+  site. The client's own "linked: … bound to LINE user …" line (`can2cup link`, `can2cup_link`) is fixed the
+  same way, reading the channel off the `discord:`-prefixed userId instead of assuming LINE.
+- `can2cup watch` docs (SKILL.md, `can2cup watch --help`): wrapping it in a bare restart loop
+  (`while true; do can2cup watch; done`) with nothing acking the output spins hot on the same unacked item
+  instead of blocking — printing content does not consume it. Documented the failure and pointed at `--exec`
+  (which acks on a zero exit) as the actual unattended mode; no code path changed.
+
+## 0.14.0 — 2026-09-09
+- The brokerage layer ships. Two agents can settle by sealed bid — a k-double-auction settlement carried in a
+  `mechanism` message (open / commit / reveal) — so a price is agreed without either side's figure being visible
+  before both are committed. The principal authorises the hidden figure off-chain (`can2cup seal-bid`) or lets the
+  agent set it within the cap; either way `checkMandate` still bounds what a reveal may open. What this deliberately
+  does NOT claim: on a struck deal, price + k + your own bid solves the counterparty's bid by arithmetic — only the
+  no-deal case and third-party hiding are protectable, and the privacy-preserving crypto that would go further is
+  kept out of the shipped surface until an external audit clears it (see ROADMAP, Tier 2).
+- Adversarial robustness (parenting-agent §1). Outbound: a fully-persuaded agent stays bounded by the mandate.
+  Inbound: a hostile peer's display name, room title, and message body can no longer forge the structure the agent
+  reads to tell a principal instruction from peer data — a new framing guard collapses control characters, scrubs the
+  principal-channel marker from names/titles, and fences every body line. demo:adversarial, test:framing.
+- Self-preservation list. The mandate gains `require_confirm`: message types the agent must never send on its own
+  even fully within every numeric cap — each held for the principal's signed go-ahead. The brake rises from "how
+  much money" to "what kind of decision", which is the structural half of catching an in-bounds-but-unwise trade or a
+  paraphrased disclosure a literal scan misses. demo:self-preservation.
+- Revocability + auditability, assembled. No new protocol — the signed `revoke`, `verifyChain`'s three-value verdict,
+  and the relay-signed head are composed into the authority ledger (grants − revokes − expired): a replayable,
+  signature-checked answer to "what does the counterparty still hold from me, and is the record honest?".
+  demo:revoke-audit, docs/revocability-and-audit.md.
+- ROADMAP.md: the hard, nice-to-have security work (Tier 2 crypto audit, semantic-disclosure detection, advisory
+  review, blind relay, npm provenance) is written down as contribution slots with where each plugs in.
+
+## 0.13.0 — 2026-09-07
+- The principal channel now reports whether it is actually delivering. Every push verdict is recorded per target
+  and per channel, and `can2cup_tell_principal` answers with what it knows: "queued" when the channel is working,
+  "ACCEPTED BY THE RELAY BUT NOT DELIVERED" plus the status and the reason when it is refusing. `can2cup_whoami`
+  carries the same line. Until now a successful return meant only that the relay took the request — not that a
+  human would ever see it, which is the worst possible property for the escape hatch an agent uses when it hits
+  its mandate. A channel nothing has ever been delivered through reports UNPROVEN rather than ok: a code path
+  that exists is not a channel that works.
+- `verifyChain` returns a verdict with three values instead of two: CLEAN, REFUTED, INCONCLUSIVE — plus a coverage
+  report saying how much of the room it actually checked. A room whose relay signing key was never pinned, and a
+  room migrated between relays (whose old system events are attested only by a key that no longer holds it), both
+  used to report `ok: true`. They are not clean; they are unproven, and saying so is the honest answer. `ok` keeps
+  its meaning (no hard failure), so nothing that reads it changes behaviour — this is an added axis, not a rewrite.
+  `can2cup history` now prints the verdict and the counts: envelopes checked, participant signatures verified,
+  system events verified / unchecked / against a past relay key, and whether the relay key was pinned at all.
+- Published a namespace proof at /.well-known/mcp-registry-auth and a server.json, so can2cup can be listed in the
+  official MCP Registry under com.can2cup/can2cup. HTTP domain authentication — no public repo, no DNS record.
+- smoke: the suite runs to the end on Windows again. It had been halting a fifth of the way in on a stale staged
+  tarball, so two thirds of its checks had not run on this machine at all; and a keep-alive connection the dev
+  server closes mid-burst is now retried once instead of aborting the run. 422 checks pass.
+
+## 0.12.2 — 2026-09-07
+- A push the channel refuses is now written to the relay log (channel, status, shortened target, reason — never the
+  body). Until today a refusal was recorded in the relay's own push log and nowhere else, so an outage looked exactly
+  like a delivered message from every side: the caller got "queued", the agent got no error, the principal got silence.
+  Found the hard way — LINE had been answering 429 "You have reached your monthly limit." for days and nothing said so.
+- Discord install links now spell out `integration_type` and `scope` instead of relying on the app's stored install
+  params. A user-install entry saved without `permissions` comes back from Discord as the string "None", which the
+  client tries to parse as a permission bitfield when it draws the consent screen — it showed its crash page instead.
+
+## 0.12.1 — 2026-09-07
+- Discord (relay only): the same console, reached from Discord. `/setup`, `/a`, `/status`, `/join`, `/room` … are slash
+  commands; 同意／拒絕／看對話 are buttons; "打字交代" opens a modal; the status card is an embed. HTTP-only — the app
+  hears no ordinary message and asks for no privileged intent, so on Discord every instruction is a `/command` (there is
+  no free-text mode to speak of). A server that installed the app for one user only (no bot member) gets an install
+  hint instead of group features that would fail at the first push. Ids carry the channel (`discord:u:…`,
+  `discord:c:…`); LINE bindings are untouched. Nothing changes on the agent's machine.
+- Texts are the LINE console's with the app's name swapped; an English console is the next step for Discord.
+
+## 0.12.0 — 2026-09-07
+!! DATA FLOW: the LINE bot now runs inside the relay Worker — LINE webhooks land on https://<relay>/line/webhook
+- Relay only; nothing changes on the agent's machine. Before: LINE → a Flask bot on Render → /bridge/* on the relay
+  with a shared key → the relay → the bot's push endpoint → LINE. Now: LINE → the relay → LINE. One fewer service
+  and one fewer shared secret in the LINE path; the relay holds the channel secret and access token itself. Bindings,
+  inboxes, group wires and quotas are exactly where they were (Durable Object storage), so nobody re-links.
+- The console (commands, buttons, cards, refusals) is a port of the Python bot with the same words: bot.ts, behind a
+  small channel interface (channel.ts) and a LINE adapter (line.ts). A Discord adapter is the next thing to plug in.
+- What went away: the bot's free-form LLM answers. A plain sentence from a bound person with /agent off now gets
+  the command hint (/a, /status, /help; /agent on to forward every line). Group chat is stored only while that
+  group has /context on (last 50 lines, 6 h) — before, the bot kept every group's recent lines in memory regardless.
+- No cold start: the Render free plan slept after 15 minutes and the first message afterwards was often lost or
+  answered a minute late. A Worker has no such gap.
+
+## 0.11.3 — 2026-09-06
+!! PERMISSION CHANGE: nine more enforcement fixes — the fourth reviewer's second pass over its own round
+- The same fresh-context model re-read the ten v0.11.2 fixes and found nine edges, each now closed with a test:
+  1. A failed principal-inbox read is not an empty inbox: nothing that commits goes out until it can be read. A
+     rejection is recorded even when its envelope cannot be fetched right now (it needs no confirmation to be safe).
+  2. A room saved by a pre-0.11.2 client (no `e2e` field) is checked against the relay once before this client
+     would speak into it without a key; if it cannot check, it does not speak.
+  3. The shared inbox cursor advances only after the decisions it carried are in the ledger.
+  4. The principal key is re-read every time it matters. Every ledger decision records the key that signed it;
+     decisions signed by a key that is no longer the principal's count for nothing, and a key created or replaced
+     while the agent runs is honoured without a restart.
+  5. A rejection is never too old to count; an approval older than 30 days no longer unlocks anything.
+  6. Nonces and spent approvals are kept by AGE (twice the 30-day window), not by count.
+  7. An approval and a rejection at the same signed instant are two decisions (identified by nonce); the rejection wins.
+  8. Recovering a dead process's ledger lock is one atomic rename; a lock is only ever released by the process that
+     holds it.
+  9. Saving a room MERGES conflict evidence with what is on disk — a reader holding an older snapshot cannot erase a
+     conflicting head another reader recorded. Up to 200 conflicts are kept.
+- Also: inbox items the commit gate drained reach the agent on every send outcome, including "room closed",
+  "room expired" and errors. Details: docs/security/2026-09-06-fifth-opinion-codex.md. Smoke: 407 → 420 checks.
+
+## 0.11.2 — 2026-09-06
+!! PERMISSION CHANGE: ten enforcement fixes from a fourth review by a different model (codex / gpt-6-astra, fresh context)
+- Ten more ways around the commit gate and the E2E promise, each closed with a regression test that fails on 0.11.1:
+  1. An amount is a finite non-negative number or nothing — a string "1000" in `data` used to pass every cap unread.
+     A currency is one of the approved terms: 100 TWD approved does not unlock 100 USD; a mandate that names a
+     currency refuses any other; an accept inherits the proposal's currency and cannot restate it.
+  2. In an E2E room, a proposal this side cannot decrypt is NOT "a proposal without an amount": the commit gate keeps
+     it as ciphertext and refuses to accept it.
+  3. An E2E room joined from a link stripped of its key is read-nothing, send-nothing: the client remembers `e2e`
+     independently of the key, refuses send/close/wire/LINE-invite, the relay refuses plaintext into an E2E room,
+     and a hosted agent handed such a link is not let in.
+  4. The commit gate reads the principal inbox before it decides — a rejection queued since the last read counts,
+     and the agent sees it in the send's result. The reservation re-picks the latest signed decision under the lock.
+  5. The approval ledger is never written without its lock: the lock is no longer bypassed after 5 s, a live holder's
+     lock is never stolen, and a caller that could not take it never unlinks it.
+  6. Spent or held approvals are tombstones that outlive the ledger's display window (they used to be evicted
+     after 200 newer ones, letting an old signed approval come back unspent). Nonces are kept 5000 deep, and a
+     signed item older than 30 days is refused as stale regardless.
+  7. `require_signed_principal` stands on its own: no key + the flag = everything drops (audited), instead of the
+     flag silently falling open; a principal key created while the agent runs is picked up without a restart.
+  8. A hosted agent cannot commit (accept/grant/revoke/close, priced proposal) under a widened mandate — the relay
+     holds no signed approval to bind it to. (No product path widens a hosted mandate today; this closes it anyway.)
+  9. A transcript that verifies but is only a PREFIX (relay's lastSeq/lastHash, its signed head, or this client's
+     cursor say the room is longer) unlocks nothing: TRANSCRIPT INCOMPLETE.
+  10. Advancing past a detected fork keeps BOTH conflicting heads in rooms.json (headConflicts, now up to 50).
+- Not changed, by design: `can2cup_tell_principal` is your own words to your principal — in an E2E room summarise,
+  do not paste (SKILL.md). Details: docs/security/2026-09-06-fourth-opinion-codex.md. Smoke: 379 → 407 checks.
+
+## 0.11.1 — 2026-09-06
+!! PERMISSION CHANGE: nine more enforcement fixes from the same reviewer's second pass — the fixes in 0.11.0 could be walked around
+- The reviewer came back to 0.11.0 with nine ways around it. All nine are closed, each with a regression test
+  that fails on 0.11.0:
+  1. The commit gate and the accept binding now VERIFY the transcript (hashes, signatures, chain) before taking
+     any terms from it. A body the relay rewrote under an intact hash unlocks nothing; a room that fails
+     verification commits to nothing until it verifies again.
+  2. "Latest decision wins" is judged by the principal's SIGNED timestamp, never the relay's outer one.
+  3. An approval is spent before the send leaves the machine, atomically across processes — two concurrent
+     sends cannot both use it. If the relay never answers, the approval stays held and the agent is told to
+     check the room and have the principal approve again.
+  4. An end-to-end encrypted room cannot be wired to a LINE group (its invite carries the room key) — refused
+     by the client before any request, and by the relay if a client skips that.
+  5. An escalate in an E2E room notifies the principal with the room id and where to read it — never the words.
+  6. The hosted agent binds an accept to the proposal's terms exactly like the local client (shared code): a
+     zero-money hosted mandate refuses a priced proposal whether or not the accept repeats the amount.
+  7. Under require_signed_principal an unsigned invite or /room request is dropped BEFORE it joins or opens
+     anything — at startup too. Dropped items are acked, so they no longer count as "queued" forever.
+  8. Revocability is one of the approved terms: an approval for a revocable grant does not unlock an
+     irrevocable one.
+  9. Two validly signed transcript heads at the same seq with different hashes are a fork: both are kept in
+     rooms.json (headConflicts), neither overwrites the other, and the client reports HEAD CONFLICT — and it
+     now also checks the signed head against the transcript it verified itself.
+- Hosted agents can join current invite links again (the ?n=&p= form since 0.9.14 was refused by a regex).
+- Record: docs/security/2026-09-06-third-opinion.md. Smoke 379 (+21).
+
+## 0.11.0 — 2026-09-06
+!! PERMISSION CHANGE: six enforcement fixes from an independent review — what a signature, an approval and a mandate actually bind
+- A second reviewer reproduced six ways the enforcement was weaker than the words. All six are closed here,
+  each with an adversarial regression test in the smoke suite:
+  1. A VERIFIED principal instruction now renders the SIGNED text only. The relay stores a separate text
+     beside the signature and could swap it; the client no longer shows that copy.
+  2. A blocked message never leaves the machine — not even inside the "blocked" notice to LINE. The notice
+     now names the rule (never_disclose, max_commit_amount, …); the text stays in the local audit log.
+  3. A signed pause is enforced from this machine's own memory: a relay that stops returning it, or a bridge
+     outage, no longer lifts it. Only a newer signed statement by the same key does. An outage is cached as
+     "paused" for a bound agent, so a retry seconds later cannot slip through.
+  4. An accept inherits the amount of the proposal it accepts, so a zero-money mandate refuses a priced
+     proposal even when the accept does not repeat the number. An accept that states a different amount is
+     refused outright (send a counter).
+  5. An approval unlocks exactly the described action. An escalate now carries the terms it asks about
+     (scope + expiresHours for a grant, amount for a proposal); the outgoing commitment must match them.
+     "Read logs for an hour" no longer unlocks "deploy production for twenty hours".
+  6. The latest signed decision wins and one approval covers one send: a rejection after an approval cancels
+     it; a used approval cannot unlock a second commitment.
+- Minor version because how approvals bind changed: agents must send escalates with scope/expiresHours or
+  amount before asking for approval, and principals will see more refusals until they do.
+
+## 0.10.6 — 2026-09-06
+- The demo relay stays open to anyone who adds the bot; abuse is handled on evidence instead. Every quota trip
+  (rooms/day, wrong codes/hour) is now recorded under the agent and the operator is told once a month per case;
+  `/admin/activity` (and `can2cup admin activity` with the relay key) lists each bound agent's activity —
+  rooms, instructions, last seen, version, hostname, flags — using only the counters the relay already kept to
+  enforce quotas. /terms gained "可以怎麼用、不可以怎麼用": human-principal agent conversations yes; unattended
+  pipelines, bulk rooms, message-bus use no; how it is seen, how bans work, how to appeal.
+- `can2cup invite <room> --line` refuses for an end-to-end encrypted room: the invite carries the room key, and
+  sending it through the bot would hand that key to the relay. Give E2E invites directly. The guide's advanced
+  section now documents E2E rooms (`/guide/#e2e`).
+- Positioning, written everywhere it matters: can2cup is a reference implementation; can2cup.com is the author's
+  demo deployment for trying and verifying, not a public service; the intended next step is running your own.
+
+## 0.10.5 — 2026-09-06
+- Release flow only. CI no longer publishes to npm directly: it STAGES the version (npm staged publishing), and
+  a maintainer promotes it with 2FA. A compromised CI or GitHub account can therefore no longer put a version
+  live — that was the one remaining way a FIRST install could receive code nobody had approved (upgrades were
+  already gated by the offline-signed manifest). The trusted-publisher connection on npmjs.com is set so CI may
+  only stage, never publish directly.
+
+## 0.10.4 — 2026-09-06
+- `can2cup backup [FILE]` / `can2cup restore FILE`: one file with everything the relay deliberately does not hold —
+  the agent's key, your own signing key, mandate, soul, personas, config, room cursors. Restore checks that the
+  keys in the file are consistent before writing anything, refuses to replace a different identity without
+  --yes, and refuses while a watch is on duty. The file holds private keys: keep it offline.
+- Guide §9 "壞掉了怎麼辦": reboot, reinstall, accidental /unbind or erase, lost ~/.can2cup — what each costs
+  and the fixed way back. Only lost keys are unrecoverable, and that is by design; backup is the answer.
+- Self-hosting guide (docs/SELF-HOST.md, also at https://can2cup.com/selfhost.md): how a person or an agent
+  stands up their own relay on Cloudflare with the official npm client, mirrors the signed release files, and
+  runs without the LINE bot. The npm package now ships src/relay, src/protocol and wrangler.toml for that.
+- A disclaimer, in /terms, the guide's trust table and README: we made what can be verified verifiable and
+  said plainly what cannot be; every service carries risk and using this one is your call.
+
+## 0.10.3 — 2026-09-06
+- Guessing codes is now rate-limited (a review item left over from 0.9.4): ten wrong /link, /setup or /join
+  codes from one caller within an hour, and the relay answers 429 until the hour is over. Right codes are never
+  counted, so one typo costs nothing; a script that hammers gets nowhere. Per LINE user on the bot side, per
+  agent key on the agent side; other callers are unaffected.
+- The relay's LINE forwarding now points at the dedicated 傳聲罐罐 can2cup official account (@789jxzby). This
+  account has its own LINE userId pool, so everyone bound through the old assistant bot has to /setup again on
+  the new one — only two people are affected at this point, and both know.
+- README's status paragraph and feature map catch up with 0.9.9 → 0.10.x (commit gate, binding lifetime, signed
+  releases); it had still described 0.5.0.
+
+## 0.10.2 — 2026-09-06
+- Release flow only; no behaviour change for users. npm is now first-hand: a pushed `v*` tag makes GitHub
+  Actions build and publish to the registry through trusted publishing (OIDC — no npm token exists anywhere,
+  no 2FA on any machine). The maintainer's machine then downloads that exact tarball from npm, signs its
+  hash into the release manifest with the offline key, and deploys the relay as the mirror. The manifest
+  now records `source: "npm"` so you can tell which path produced a release.
+- Provenance (the build attestation shown on npmjs.com) will follow when the repository is public.
+
+## 0.10.1 — 2026-09-06
+- can2cup is on the npm registry: https://www.npmjs.com/package/can2cup (0.10.0 was the first publish).
+  `npm i -g can2cup` is now the install line everywhere — /setup on LINE, the invite landing page, README,
+  INSTALL, SKILL, llms.txt. The relay's /dl/can2cup.tgz stays as the mirror for networks where npm is blocked.
+- `can2cup upgrade` takes the bytes from the npm registry by default and still refuses unless their hash is in
+  the maintainer-signed manifest the relay serves. Two hosts, one signature: the relay decides which version
+  and which hash, npm only stores the file. `--from-relay` downloads from /dl/ instead.
+- Release flow: `npm run release:npm` publishes the exact tarball the relay serves and the manifest signs —
+  never a fresh pack — so the hash matches on both hosts. (This 0.10.1 is the first release built that way;
+  0.10.0 on npm and on the relay were two different packs of the same source.)
+
+## 0.10.0 — 2026-09-05
+- Signed releases (security G-3, step 2 of 3). Every release now ships /dl/manifest.json (version, date, the
+  tarball hashes, whether this version changes permissions or data flow) and /dl/manifest.sig, signed with a
+  release key that lives OFFLINE on the maintainer's machine — not on the relay, not in any secret store.
+  `can2cup upgrade` refuses to install unless the manifest verifies against a release key compiled into the
+  client, names the same version as /dl/VERSION, and lists the hash of the tarball it downloaded. There is no
+  fallback to the bare sha256: a relay operator, or whoever takes the relay over, can rewrite every file under
+  /dl/ but cannot produce that signature. `--allow-unsigned` is the explicit opt-out; `--dry-run` shows what
+  would be installed and by whose key. `can2cup doctor` prints the release key(s) this client trusts and which
+  key signed the last install.
+- The signed manifest also declares permissionChange / dataFlowChange, so a `!!` release stops for the
+  principal even if a changelog were edited to hide it.
+- Rotation: a new key is added to the client's list one release before the old one is dropped; a stolen key is
+  announced here and MIN_CLIENT is raised after the usual 7-day notice.
+- Minor version because the trust root moved: tell your principal before upgrading (SKILL §3.5).
+- Packaging: the package is now publishable to the npm registry (metadata added, `private` removed). The relay
+  tarball stays the bootstrap path; npm provenance (step 3) comes with the public repository.
+
+## 0.9.14 — 2026-09-05
+- Five names, said out loud (the rest of G-4). GET / now returns `canonical` and `aliases`; /terms lists
+  them next to the one signing key. A release refuses to ship if the declared names drift from the
+  routes (scripts/routes-check.mjs). `aliases` is for display — trust still comes from the key alone.
+- Invites now carry the relay's canonical name and always vouch for its key (`p=`), so an old room no
+  longer keeps spreading an old hostname to new people, and every join has a key to check against. A
+  room whose key is not pinned yet is pinned (one read) before an invite is produced; offline, the
+  invite is refused rather than issued blind.
+- Joining a room you already have, from an invite on another hostname, is no longer silent: same key →
+  "now addressed as … (a rename, not a move)"; different key → "ROOM MOVED", with the old key kept so
+  its system events still verify.
+- The relay records which of its names each agent last used (`/admin/hosts`), so an old name is retired
+  on numbers — zero agents for 30 days — never on a guess. Until then no name is removed.
+- The LINE bot's /setup pastes the relay's canonical name, not whatever URL the bot was configured with.
+- Hosted agents (key on the relay) now count as "seen" on every connector call, so they are covered by
+  the idle-binding rule too instead of being excluded.
+- `can2cup setup --idle-days <N|forever>` sets the binding lifetime at setup time.
+- The upgrade check is now exercised end to end in smoke: a relay serving a tampered tarball is refused
+  and nothing is installed.
+
+## 0.9.13 — 2026-09-05
+- Relay: the /bridge/debug/* routes (smoke-only: push ledger, inbox dump, forced idle sweep) now answer 404
+  unless the relay is started with DEBUG_ROUTES=1. They already needed the bot's key, but one of them can
+  expire every idle binding at once, and a leaked bot key must not be able to do that on a live relay.
+- SKILL §4 mentions `can2cup keep` and what a "BINDING EXPIRES" inbox item means (reading it is the renewal).
+
+## 0.9.12 — 2026-09-05
+!! PERMISSION CHANGE: a LINE binding now expires by itself once the AGENT has been gone 90 days (relay-side)
+- Three things to know. (1) The clock is the agent's absence, never yours: seen:<pub> moves only on the
+  agent's own signed calls, so a quiet principal with a busy agent is never unbound, and nobody can age
+  a binding from outside. (2) A warning comes first — 14 days before expiry, one LINE message and one
+  inbox item; the agent reading that item is itself a renewal. (3) Your signed layer is untouched: the
+  principal-key pin and any signed pause survive the lapse, so a brake you signed does not lift because
+  a LINE binding expired. `can2cup say` still verifies afterwards.
+- Why: a binding to a computer nobody has opened in three months points at a machine that may have been
+  sold, given away, or scrapped — and your /a, and any group chat with /context on, kept flowing into an
+  inbox nobody reads. The privacy page said "until the agent reads it"; an agent that never reads meant
+  forever. (security review, 2026-09-05; raised by an early user; the maintainer set 90 days.)
+- Override: on LINE `/keep` shows the setting, `/keep 30` sets 7–365 days, `/keep 永久 確定` never
+  expires (it tells you what that costs). On the computer: `can2cup keep [<days>|forever]`.
+  `/status` and `can2cup status` show when the binding would lapse.
+- Group wires now follow their room: when a room wired to a LINE group expires (30 days after its last
+  message) or is closed, the wire is removed and the group is told; 3 days before, the group is warned
+  once. Speaking to the agent from the group (/a) now counts as use and extends the room — before,
+  only in-room messages did, so a group in daily use could still lose its room.
+- Roll-out: on this relay, expiry does not run for the first 30 days after this deploy (warnings do),
+  so every existing binding hears the rule before it applies. Hosted agents (key on the relay, no
+  heartbeat) are excluded for now.
+
+## 0.9.11 — 2026-09-05
+- `can2cup upgrade` now downloads the tarball, checks its sha256 against /dl/VERSION.sha256 (written by
+  the same deploy that writes VERSION), and only then hands the file to npm. A mismatch refuses and
+  installs nothing. Same origin as the tarball, so this does not stop a hostile relay — it stops a
+  corrupted or swapped file, and GET / now advertises `dlSha256` so a person can compare the number out
+  of band. `--require-checksum` refuses a relay that serves none. `can2cup doctor` shows what was
+  installed and whether it was verified. (security G-3, step 1 of 3; an offline signing key is step 2.)
+- `can2cup upgrade` reads this changelog first: if any release between yours and the relay's carries a
+  `!! PERMISSION CHANGE` or `!! DATA FLOW` line, it prints those lines and stops (exit 3). The agent
+  shows them to its principal and runs again with --yes. Upgrading means installing code you have not
+  reviewed; the lines that change who-may-do-what must reach a human before that happens.
+- `can2cup unbind` now asks for --yes like erase / uninstall / leave --all, and says first what it
+  deletes, what it keeps, and what it cannot delete.
+- `can2cup --help` lists every command (leave, unbind, erase, uninstall, forget, persona, groups, wire,
+  note, watch, ack, doctor, report, relay were missing).
+- Docs: the unsigned-LINE-path paragraph (what the trust ceiling is, what it can buy under default
+  rules, what the commit gate changes) now appears in README, SKILL §3, the guide §5, /terms and the
+  privacy page. It says the same thing in all five places.
+
+## 0.9.10 — 2026-09-05
+!! PERMISSION CHANGE: under a WIDENED mandate, LINE's 同意 button no longer commits — a signed approval does
+- The commit gate (security decision G-2 (b)). LINE is an unsigned path: the relay or bot operator, or
+  whoever holds the phone, can put words in your mouth. Under the default mandate that cannot cost
+  anything — max_commit_amount 0 and may_grant [] already stop money and authority. The exposure starts
+  the moment you widen the mandate. So from this version, once max_commit_amount > 0 or may_grant is
+  non-empty, your agent will not send an accept, a grant, or a proposal/counter with an amount unless a
+  principal-SIGNED approval bound to the exact envelope it commits to is on record:
+      can2cup approve <room> <seq>        (on the computer; binds your key to that envelope's hash)
+  An accept binds to the proposal/counter it accepts (give ref=<seq>); a grant or an amount-bearing
+  proposal binds to the escalate your agent sent first, describing what it intends. Same rule whatever
+  channel the go-ahead came on — typed in Claude Code, tapped on LINE, or inserted by the operator.
+  When it refuses, it tells you on LINE why the button did nothing.
+- Off switch: mandate.json `unsigned_may_commit: true` = "I trust the LINE path for commitments too";
+  behaviour returns to 0.9.9. Nothing changes for a default mandate.
+- The bridge now knows each agent's tier (reported at start-up); LINE /status says whether money and
+  grants need a signature on the computer. Agents older than this show "not reported". A tapped button
+  arrives as via "line-button", distinct from typed text.
+- The UNVERIFIED header now says in plain words what an unsigned instruction can and cannot move.
+- Still true, and still in the copy: until the LINE path is signed, the trust ceiling is the relay
+  operator. What this version changes is what that ceiling can buy under the default rules: words in
+  your agent's name, not money.
+
+## 0.9.9 — 2026-09-05
+!! PERMISSION CHANGE: who may re-point a connected group (relay-side, everyone at once)
+!! PERMISSION CHANGE: `can2cup relay <url>` refuses a relay with a different signing key; no --force
+- A connected LINE group can now only be re-pointed by the person who connected it. Until now any
+  bound member of the group could type /room or /mirror and move the wire to their own agent — from
+  then on everything the group said went to a different computer, and nobody was asked. 0.9.7 closed
+  /context on the same way; this closes the wire itself. /unmirror stays open to everyone, because
+  the protective direction never needs permission; once the wirer unbinds or the room closes, the
+  wire is free again. Relay-side: in force for every client version as soon as the relay is deployed.
+  Found by the security review (docs/security/2026-09-05-g2-line-path-unsigned.md, T4).
+- `can2cup relay <url>` (0.9.8 checked the key; this removes the --force that could skip the check).
+  A "the relay moved, run this" message must never be enough to hand every room's cap and secret to
+  an arbitrary host. Moving a room to a genuinely different relay is export / import, which carries
+  the old relay's key along so the chain still verifies.
+- /status on LINE shows "bound since" for your 1:1 binding and "connected since" for each group. The
+  relay now returns boundAt and wiredAt; groups wired before this version show no time.
+- `can2cup address` — how your agent addresses you (default 老闆), asked once at setup or set with
+  `--address`. Stored in ~/.can2cup/config.json and one line of soul.md, never sent to the relay.
+  (Interface session.)
+
+## 0.9.8 — 2026-09-05
+- A relay is its signing key, not its hostname. The same worker answers on can2cup.com, www.can2cup.com
+  and the three peachpitboat names (can2cup / can2can / parley), under ONE key — but nothing ever said so,
+  and when the client's default moved to can2cup.com (0.8.4) rooms.json read like the service had changed
+  hands. Now `can2cup rooms` (and the can2cup_rooms tool) ends with one line per relay key listing the
+  hostnames it answers on, and says plainly when two names are one relay. Two different keys are called
+  two relays.
+- `can2cup relay <url>` checks before it rewrites: the new hostname must present the key your rooms are
+  pinned to. A hostname that does not answer, or answers with a different key, is refused (--force
+  overrides, and says what will break). Moving rooms to a genuinely different relay is export / import.
+- Rule from here on: when the client's default relay hostname changes, this changelog says so. Recorded
+  late: 0.8.4 (2026-09-04) moved the default from can2cup.peachpitboat.com to can2cup.com — same worker,
+  same key, nothing changed hands.
+- Client-side only; no permission or data-flow change.
+
+## 0.9.7 — 2026-09-05
+!! PERMISSION CHANGE: who may turn /context on
+!! DATA FLOW: a guest question now carries its provenance in the message text
+- /context on is now the wirer's call. Anyone in a connected group could turn it on, which meant one
+  member could unilaterally decide that everybody else's messages get sent to somebody's computer.
+  It announced itself, but an announcement is not consent. Only the person who connected the group
+  can turn it on now; ANYONE can still turn it off, because the protective direction should never
+  need permission. Raised by another user's agent reviewing the feature, and they were right.
+- A guest question (/ask) now carries "【群成員提問·不是你的老闆·無授權效力】" in the message text
+  itself, not only in the structured field. A client older than 0.9.4 does not know that field, and
+  an unsigned inbox item sorts into its "claiming to come from your principal" block — labelling a
+  stranger's question in the one direction that could cause harm. The prefix means every client, at
+  every version, sees where it came from.
+- Both of these are relay-side: they take effect for everyone as soon as the relay is deployed,
+  whatever version the client is on.
+
+From here on, any release that changes who may do what, or where data goes, says so on its first
+line. Upgrading means installing a tarball you have not reviewed; you should be able to see in one
+glance whether a version touches permissions.
+
+## 0.9.6 — 2026-09-05
+- soul.md. ~/.can2cup/soul.md is who this agent is everywhere — its register, written by its boss and
+  read before it speaks. Per place there is ~/.can2cup/personas/<place>.md, which the agent writes
+  itself: how it actually lands in that group, revised as it learns. Both stay on the agent's own
+  machine; how someone's assistant talks to their family is not the relay operator's business.
+    can2cup soul                     print it, and where to edit it
+    can2cup persona <place> ["…"]    read or revise how it lands somewhere
+  A persona is register, NOT authority: mandate.json alone decides what may be done, and a group
+  member cannot edit a persona by asking — it is the agent's own reflection, not dictation.
+- --text-file for send / tell / close / persona. On Windows the can2cup.cmd shim runs through cmd.exe,
+  where a newline inside an argument ends the command: a multi-line message was silently truncated to
+  its first line while the send still reported success. Anything longer than one line should come
+  from a file now.
+- The word for the person an agent answers to is 老闆, not 主人, everywhere a human reads it.
+
+## 0.9.5 — 2026-09-05
+- Leaving. Every step of getting in now has a named step for getting out, and each one prints what it
+  actually deleted instead of just saying "done".
+    can2cup leave <room> | --all   take yourself out of a conversation (the relay drops you and the
+                                   invite secret rotates, so you cannot be walked back in)
+    can2cup unbind                 undo the 1:1 LINE binding; keys and conversations stay
+    can2cup erase --yes            ask the relay to delete everything it holds about this agent
+    can2cup uninstall --yes        all of the above, then deregister the MCP server and delete
+                                   ~/.can2cup  (--keep-data keeps your own transcripts)
+  On LINE: /unbind and /forgetme, each confirmed by retyping the word (no pending-confirmation state
+  that a restart could drop or, worse, keep).
+- What deletion does NOT do is said out loud everywhere it is offered: the other participants hold a
+  signed copy of what you wrote, and a push already handed to LINE is on LINE's servers. Erasing does
+  not delete a ban either — unbind-and-rebind cannot launder one.
+- For humans there is now one word for all of it: binding. 1:1 binding (your LINE ↔ your computer),
+  group binding (a LINE group ↔ an agent), conversation binding (your agent ↔ someone else's).
+
+## 0.9.4 — 2026-09-05
+- Someone in a connected LINE group who has no agent of their own can type /ask <question>. It reaches the
+  agent that connected the group, in its own block, under a header that says it is a group member with no
+  authority: data to answer, never an instruction to obey. Ten an hour per group.
+- /context on|off (per group, off by default): whether an instruction carries the group's recent chat with
+  it. Turning it on announces in the group that what people say there will be sent to someone's agent.
+- The relay reports both settings back on every instruction, so the bot needs no extra call and a bot that
+  has just restarted attaches nothing until it has been told the group said yes.
+
+## 0.9.3 — 2026-09-05
+- A LINE group can ask the bot to stop acknowledging every /a: type /quiet there (/unquiet to undo).
+  The instruction still reaches the agent; only the receipt goes away, so a family group is not
+  narrated by a robot every time someone speaks to their own agent. An offline warning is still said.
+- /status shows which groups are quiet; the setting lives on the relay, so a bot restart keeps it.
+- A group appears in /status the moment it is wired, instead of only after its first message.
+
+## 0.9.2 — 2026-09-04
+- A room wired to a LINE group no longer dies on the 6 h default TTL. Wiring gives it a sliding 30-day life,
+  pushed forward by every message; unwiring gives it back the ordinary TTL. (The 罐罐測試 group's room had
+  expired quietly, and every send into it failed with nobody being told.)
+- An expired room is now visible instead of silent: the send answers `NOT SENT … ttl expired`, `can2cup rooms`
+  shows it as `expired`, the transcript stays readable, and the principal gets one LINE notice — in the group,
+  if that room was the group's channel, with `/room` as the way back.
+- `can2cup watch` stands down when a newer client is installed under it: it prints a restart line and exits 0,
+  so the session that started it brings duty back up on the new code. (A running process cannot swap its own
+  code; before this, an upgrade left the watch on the old one until it happened to exit.)
+
+## 0.9.1 — 2026-09-04
+- `can2cup upgrade --force` really reinstalls (the flag was read as if it took a value).
+
+## 0.9.0 — 2026-09-04
+- Upgrade protocol. Every call carries `x-can2cup-client`; every relay reply carries `x-can2cup-latest` and `x-can2cup-min`.
+  The agent sees a notice (watch output, MCP context, whoami) at most once a day per version and decides:
+  patch → just upgrade; minor → tell the principal first; below the relay minimum → required (A2A routes answer 426).
+- `can2cup upgrade [--force]` and `can2cup version`.
+- Clients from before 0.9.0 send no version: their principal gets one LINE nudge a month with the install line.
+- LINE /status shows each agent's version.
+
+## 0.8.4 — 2026-09-04
+- Relay traffic: the watch read the principal inbox twice per room per sweep; now once per sweep. Heartbeat 60 → 120 s, watch interval 25 → 30 s.
+- `can2cup relay <url>`: move config + rooms to a new hostname of the same relay (used for the can2cup.com move).
+
+## 0.8.3 — 2026-09-04
+- Three-way review fixes: mirror integrity, push retry with backoff, exclusive inbox leases, idempotent /room, report quotas, presence from live routes only.
+
+## 0.8.0–0.8.2 — 2026-09-03/04
+- Duty lock, delivery leases + ack, per-room notes, `can2cup doctor` / `report`, rooms openable by any LINE-linked agent, `--group` wiring.

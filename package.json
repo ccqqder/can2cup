@@ -1,0 +1,89 @@
+{
+  "name": "can2cup",
+  "version": "0.17.0",
+  "mcpName": "com.can2cup/can2cup",
+  "description": "can2cup 傳聲罐罐 — a tin can, a paper cup, one string: signed rooms where two people's AI agents talk under their principals' mandates.",
+  "type": "module",
+  "homepage": "https://can2cup.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ccqqder/can2cup.git"
+  },
+  "bugs": {
+    "url": "https://can2cup.com/guide/#faq"
+  },
+  "keywords": ["mcp", "agent", "a2a", "mcp-server", "agent-to-agent", "line", "discord", "telegram", "ed25519", "claude-code", "can2cup", "傳聲罐罐", "model-context-protocol", "multi-agent", "human-in-the-loop", "agentic-ai", "llm", "codex", "cursor", "cloudflare-workers", "self-hosted"],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "can2cup": "dist/cli/index.js",
+    "can2cup-mcp": "dist/mcp/index.js",
+    "can2can": "dist/cli/index.js",
+    "parley": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check:relay": "tsc -p tsconfig.relay.json --noEmit",
+    "dev:relay": "wrangler dev --local-upstream 127.0.0.1 --upstream-protocol http",
+    "deploy:relay": "wrangler deploy",
+    "release:relay": "node scripts/routes-check.mjs && node scripts/stage-tarball.mjs --from-npm && node scripts/release-sign.mjs && wrangler deploy",
+    "release:key": "node scripts/release-key.mjs",
+    "release:npm": "node scripts/release-npm.mjs",
+    "check:routes": "node scripts/routes-check.mjs",
+    "check:pii": "node scripts/pii-check.mjs --tree",
+    "check:i18n": "node scripts/i18n-check.mjs",
+    "smoke": "node dist/scripts/smoke.js",
+    "view": "node dist/viewer/index.js",
+    "pack": "npm run build && npm pack",
+    "release:relay:local": "node scripts/routes-check.mjs && node scripts/stage-tarball.mjs && node scripts/release-sign.mjs && wrangler deploy",
+    "check:line": "node scripts/line-webhook-check.mjs",
+    "check:discord": "node scripts/discord-check.mjs",
+    "check:telegram": "node scripts/telegram-check.mjs",
+    "check:chat": "node scripts/chat-e2e.mjs",
+    "probe:prod": "node scripts/probe-prod.mjs",
+    "telegram:app": "node scripts/telegram-app.mjs",
+    "discord:app": "node scripts/discord-app.mjs",
+    "demo:collapse": "npm run build && node demo/principal-collapse.mjs",
+    "demo:mechanism": "npm run build && node demo/sealed-bid.mjs",
+    "demo:adversarial": "npm run build && node demo/adversarial-containment.mjs",
+    "demo:self-preservation": "npm run build && node demo/self-preservation.mjs",
+    "demo:revoke-audit": "npm run build && node demo/revoke-and-audit.mjs",
+    "test:framing": "npm run build && node dist/scripts/framing-test.js",
+    "test:mechanism": "node dist/scripts/mechanism-test.js",
+    "test:mechanism:e2e": "node dist/scripts/mechanism-e2e.js"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@noble/ed25519": "^3.1.0",
+    "@noble/hashes": "^2.3.0",
+    "hono": "^4.13.2",
+    "qrcode": "^1.5.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260818.1",
+    "@types/node": "^26.2.0",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.123.0"
+  },
+  "files": [
+    "dist",
+    "!dist/scripts",
+    "README.md",
+    "SKILL.md",
+    "INSTALL.zh-tw.md",
+    "LICENSE",
+    "NOTICE",
+    "src/relay",
+    "src/protocol",
+    "tsconfig.relay.json",
+    "wrangler.toml",
+    "docs/SELF-HOST.md"
+  ]
+}

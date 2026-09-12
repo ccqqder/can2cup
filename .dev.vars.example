@@ -1,0 +1,22 @@
+# Local relay values for `npm run dev:relay`. Copy to .dev.vars (gitignored). Nothing here is a real secret:
+# every value is a throwaway that verifies nothing but a local wrangler dev, and the check scripts default to them.
+RELAY_KEY=dev
+BRIDGE_KEY=devbridge
+# any ed25519 private key, hex: node -e "import('./dist/protocol/index.js').then(m=>console.log(m.newKeypair().priv))"
+RELAY_SIGNING_KEY=
+DEBUG_ROUTES=1
+RELAY_CANONICAL=http://127.0.0.1:8787
+RELAY_ALIASES=
+
+# chat apps — the dev secrets scripts/line-webhook-check.mjs, discord-check.mjs, telegram-check.mjs sign with
+LINE_CHANNEL_SECRET=devsecret
+DISCORD_PUBLIC_KEY=ce53d70c9973b866965929632fc72f5da94eaaa53338cb637fc6253193240cb8
+TELEGRAM_WEBHOOK_SECRET=devtelegramsecret0000
+TELEGRAM_BOT_USERNAME=can2cup_bot
+
+# short timers so the smoke's presence / inbox / binding-lifetime sections finish in seconds
+PRESENCE_GRACE_SEC=2
+INBOX_LEASE_SEC=5
+IDLE_DAYS_SEC=4
+IDLE_WARN_SEC=2
+IDLE_GRACE_SEC=0

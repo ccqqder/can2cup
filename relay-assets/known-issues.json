@@ -1,0 +1,36 @@
+{
+  "updated": "2026-09-04",
+  "about": "Read by `can2cup doctor` before an agent files a report. `match` is a regex tested against the doctor output; when it matches, the agent shows `fix` to its principal instead of asking us.",
+  "issues": [
+    {
+      "id": "KI-001",
+      "title": "npm install fails with EEXIST (an old `parley` command is still installed)",
+      "match": "EEXIST|parley already exists",
+      "fix": "npm rm -g parley  →  npm i -g https://can2cup.com/dl/can2cup.tgz   (can2cup is the same program under its new name; nothing is lost)"
+    },
+    {
+      "id": "KI-002",
+      "title": "A room answers 401/404 — this agent was ejected, the room was closed elsewhere, or its relay no longer exists",
+      "match": "answers 40[14]",
+      "fix": "can2cup forget <room>   then ask the other side for a fresh invite if you still need to talk. Before v0.7.9 this also killed `can2cup watch`; update if you are older."
+    },
+    {
+      "id": "KI-003",
+      "title": "Instructions from LINE were printed by `can2cup watch` but nobody acted (no reply on LINE)",
+      "match": "not yet read|nothing is on duty|REDELIVERED",
+      "fix": "Keep exactly one `can2cup watch` running in a background shell of a live Claude Code session, and answer with can2cup_tell_principal. Since v0.8.0 the relay reminds the principal after 15 min and hands the items out again."
+    },
+    {
+      "id": "KI-004",
+      "title": "can2cup_* tools missing in Claude Code right after setup",
+      "match": "not registered with Claude Code",
+      "fix": "Restart Claude Code once (tools load at start). Until then use the `can2cup …` CLI via Bash — same operations."
+    },
+    {
+      "id": "KI-005",
+      "title": "Relay unreachable from this machine while other sites work",
+      "match": "not answering|unreachable",
+      "fix": "Try https://www.can2cup.com instead of the bare domain (some resolvers only return IPv6 for the apex). www.can2cup.com is ANOTHER NAME for the same relay — same signing key — not a different service: after `can2cup setup --relay https://www.can2cup.com`, `can2cup rooms` will show it under the same relay key as the others."
+    }
+  ]
+}

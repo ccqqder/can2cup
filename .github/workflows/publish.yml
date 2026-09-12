@@ -1,0 +1,75 @@
+# Trusted publishing (npm ← GitHub Actions via OIDC). No npm token lives anywhere: npmjs.com is configured to
+# accept publishes only from THIS workflow file in THIS repository, and each run gets a short-lived credential.
+#
+# Release order (see docs/RELEASING.md and README "Releasing"):
+#   1. bump package.json + changelog, commit, then:  git tag v<version> && git push origin v<version>
+#   2. this workflow builds from the tagged commit and publishes can2cup@<version> to the registry
+#   3. on the maintainer's machine:  npm run release:relay   — downloads THAT tarball from npm, signs its hash
+#      into dl/manifest.json with the offline release key, and deploys the relay (which serves the same bytes as a mirror)
+#
+# Provenance (the "built on GitHub Actions" attestation) needs a public repository; add `--provenance` to the
+# publish step the day the repo goes public. Nothing else changes.
+name: publish to npm
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write   # OIDC token for npm trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # trusted publishing needs npm >= 11.5.1 (the CLI exchanges the OIDC token itself)
+      - run: npm install -g npm@latest && npm --version
+
+      - name: tag must match package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then echo "tag v$TAG but package.json says $PKG" >&2; exit 1; fi
+
+      - run: npm ci
+      # nothing personal or secret may ship: home paths, e-mails, chat ids, tokens (scripts/pii-check.mjs)
+      - run: npm run check:pii
+      - run: npm run check:i18n
+      - run: npm run build
+      - run: npm run check:relay
+
+      # the client must not ship the smoke script or the relay; `files` in package.json is the allowlist
+      - name: what would be published
+        run: npm publish --dry-run --access public 2>&1 | grep -E "notice (package|total files|shasum)"
+
+      # a re-pushed or rewritten tag must not fail the run: if this version is already on the registry, stop here
+      - name: already published?
+        id: exists
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          if npm view "can2cup@$PKG" version >/dev/null 2>&1; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "can2cup@$PKG is already on the registry — nothing to publish"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+
+      # v0.10.5: STAGED publishing. CI can only put the version in npm's staging queue; a maintainer promotes it with
+      # 2FA (`npm stage approve <stage-id>`, or on npmjs.com). A compromised CI or GitHub account therefore cannot
+      # push a version live — the gap that used to exist for FIRST installs (upgrades were already gated by the
+      # offline-signed manifest). The trusted-publisher connection on npmjs.com must have "Allow npm publish" OFF.
+      - name: stage publish
+        if: steps.exists.outputs.skip != 'true'
+        run: npm stage publish --access public
+        # when the repository is public:  npm stage publish --access public --provenance
+
+      - name: what happens next
+        if: steps.exists.outputs.skip != 'true'
+        run: |
+          echo "staged. On the maintainer's machine:"
+          echo "  npm stage list can2cup            # find the stage-id"
+          echo "  npm stage approve <stage-id>      # 2FA (passkey) — the version goes live"
+          echo "  npm run release:relay             # mirror that tarball to the relay, sign, deploy"
