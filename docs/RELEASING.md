@@ -47,8 +47,8 @@ can be cut from either; the property this buys is that no relay operator and no 
 of the tarball it downloaded. `npm run release:key` mints a key; adding one means shipping a client that trusts it.
 Design record: [security/2026-09-05-g3-tarball-signing.md](security/2026-09-05-g3-tarball-signing.md).
 
-Once the repository is public, add `--provenance` to the workflow's `npm stage publish` step and npm shows the build
-attestation as well.
+The repository is public, so the workflow's `npm stage publish` step passes `--provenance` and npm shows the build
+attestation ("built on GitHub Actions from this commit") next to the signed manifest.
 
 ## The changelog and the `!!` rule
 

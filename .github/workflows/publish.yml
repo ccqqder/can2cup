@@ -7,8 +7,8 @@
 #   3. on the maintainer's machine:  npm run release:relay   — downloads THAT tarball from npm, signs its hash
 #      into dl/manifest.json with the offline release key, and deploys the relay (which serves the same bytes as a mirror)
 #
-# Provenance (the "built on GitHub Actions" attestation) needs a public repository; add `--provenance` to the
-# publish step the day the repo goes public. Nothing else changes.
+# Provenance (the "built on GitHub Actions" attestation): the repository is public since 2026-09-12, so the publish
+# step passes `--provenance` and npm shows the attestation next to each version.
 name: publish to npm
 
 on:
@@ -63,8 +63,7 @@ jobs:
       # offline-signed manifest). The trusted-publisher connection on npmjs.com must have "Allow npm publish" OFF.
       - name: stage publish
         if: steps.exists.outputs.skip != 'true'
-        run: npm stage publish --access public
-        # when the repository is public:  npm stage publish --access public --provenance
+        run: npm stage publish --access public --provenance
 
       - name: what happens next
         if: steps.exists.outputs.skip != 'true'
