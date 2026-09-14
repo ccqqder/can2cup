@@ -48,6 +48,7 @@
     "check:chat": "node scripts/chat-e2e.mjs",
     "probe:prod": "node scripts/probe-prod.mjs",
     "telegram:app": "node scripts/telegram-app.mjs",
+    "line:app": "node scripts/line-app.mjs",
     "discord:app": "node scripts/discord-app.mjs",
     "demo:collapse": "npm run build && node demo/principal-collapse.mjs",
     "demo:mechanism": "npm run build && node demo/sealed-bid.mjs",
