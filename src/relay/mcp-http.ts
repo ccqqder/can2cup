@@ -33,7 +33,7 @@ import {
 } from "../protocol/index.js";
 // The same pure untrusted-text guards the local client uses (sixth opinion #4): this hosted surface renders
 // peer names, room titles and message bodies too, and must frame them identically or the floors drift.
-import { safeLabel } from "../mcp/framing.js";
+import { safeLabel } from "../protocol/framing.js";
 import { chatApps } from "./channels.js";
 // The browser entry is the one that bundles for a Worker: the package's Node entry
 // pulls in `fs` for file output, which we never use.

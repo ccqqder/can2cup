@@ -52,7 +52,7 @@ import {
 import { type Card, type Channel, type Incoming, type Out, type Quick, outText, vocabIn } from "./channel.js";
 import { makeChannels, channelFor, channelNamed } from "./channels.js";
 import { tr } from "./i18n.js";
-import { safeLabel } from "../mcp/framing.js";
+import { safeLabel } from "../protocol/framing.js";
 import { type BotApi, type BotCtx, type Handled, BridgeError, SILENT, bridgeDown, GROUP_HELLO, nonTextReply, plainTextHint, WELCOME, chipsFor, handlePostback, handleText, isCommand } from "./bot.js";
 
 export interface BridgeEnv {

@@ -22,7 +22,7 @@ import {
   parseOpen, resolveMechanism, sealDigest, otherSide, MECH_RULE, type Side, verifySealedBid, randomHex,
 } from "../protocol/index.js";
 import { relay, bridge, RelayError, type ChannelHealth, type InboxItem, type Poll, type Note } from "./relay-client.js";
-import { scrub, safeLabel, fenceBody } from "./framing.js";
+import { scrub, safeLabel, fenceBody } from "../protocol/framing.js";
 import { isLang, langInfo, DEFAULT_LANG } from "../protocol/lang.js";
 import {
   DEFAULT_RELAY, HOME, RELAY_KEY, type LocalRoom,

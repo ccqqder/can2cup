@@ -21,7 +21,7 @@
  *   npm run demo:adversarial      # builds, then runs
  */
 import { checkMandate } from "../dist/protocol/index.js";
-import { scrub, safeLabel, fenceBody, BODY_FENCE } from "../dist/mcp/framing.js";
+import { scrub, safeLabel, fenceBody, BODY_FENCE } from "../dist/protocol/framing.js";
 
 // A concrete mandate: this agent buys a used stroller, cap 5000 TWD, its floor 2400 must never leak,
 // it may only grant read scopes for at most a day.
@@ -136,7 +136,7 @@ console.log("\nWhat this proves (the §2 thesis, concretely):");
 console.log("  • OUTBOUND — a compromised agent's blast radius is bounded by a rule (checkMandate) it cannot argue");
 console.log("    with and cannot rewrite from a message. Every cap / scope / currency / literal-disclosure breach is");
 console.log("    contained regardless of persuasion.");
-console.log("  • INBOUND — a peer's name, room title, and body are framed (mcp/framing.ts) so they read as DATA and");
+console.log("  • INBOUND — a peer's name, room title, and body are framed (protocol/framing.ts) so they read as DATA and");
 console.log("    cannot forge a principal instruction. This closed three unguarded surfaces (name, title, body fence).");
 console.log("\nThe one thing structure still cannot cap: a SEMANTIC disclosure (§3 residual) or a bad-but-in-bounds");
 console.log("trade. That is the honest boundary — a job for advisory review and the self-preservation list, not a");

@@ -1,11 +1,11 @@
 /**
- * Pure unit test for the untrusted-text framing guards (protocol-adjacent, mcp/framing.ts). No relay,
+ * Pure unit test for the untrusted-text framing guards (protocol/framing.ts). No relay,
  * no identity: it feeds attacker-controlled strings through scrub / safeLabel / fenceBody and asserts
  * that none can forge the structure the agent relies on to tell principal instructions from peer data.
  *
  *   npm run build && node dist/scripts/framing-test.js
  */
-import { scrub, safeLabel, fenceBody, BODY_FENCE } from "../mcp/framing.js";
+import { scrub, safeLabel, fenceBody, BODY_FENCE } from "../protocol/framing.js";
 
 let passed = 0;
 function expect(cond: unknown, msg: string): void {

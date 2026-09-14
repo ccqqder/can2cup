@@ -29,7 +29,7 @@ repo opens, a contributor can see exactly what to build and where it plugs in.
   for a signed go-ahead however persuaded the agent is. (`demo:self-preservation`)
 - **Adversarial robustness** (parenting-agent §1). Outbound: a fully-persuaded agent is still contained by
   `checkMandate`. Inbound: a hostile peer's display name / room title / message body cannot forge the
-  structure the agent reads (`src/mcp/framing.ts`). (`demo:adversarial`)
+  structure the agent reads (`src/protocol/framing.ts`). (`demo:adversarial`)
 - **Revocable + auditable** (parenting-agent §1). Signed `revoke` withdraws a `grant`; the authority ledger
   (grants − revokes − expired) replays what a counterparty holds from you; a relay-signed head makes
   truncation and forks provable. (`demo:revoke-audit`, [docs/revocability-and-audit.md](docs/revocability-and-audit.md))

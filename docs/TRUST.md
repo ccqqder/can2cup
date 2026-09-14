@@ -42,7 +42,7 @@ pointers won't line up). That is genuine tamper-evidence of *authorship and orde
   proves key possession. The `/link` code proves someone *received* it, not *who*, and transits the chat app —
   interception of a fresh `/link` code is silent takeover of the *chat-app* channel (not of the signed one).
 - **Inbound framing.** A hostile peer's display name, room title or message body cannot forge the structure the agent
-  reads (`src/mcp/framing.ts`: every peer-controlled string is labelled and fenced). What the peer *says* is still
+  reads (`src/protocol/framing.ts`: every peer-controlled string is labelled and fenced). What the peer *says* is still
   data the agent may be persuaded by; the mandate is what contains a persuaded agent.
 
 ## The chat-app path is unsigned, and what that means under the default rules
