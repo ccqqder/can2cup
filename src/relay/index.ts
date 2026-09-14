@@ -51,7 +51,7 @@ import {
   verifyRequestHeaders, isEncrypted,
 } from "../protocol/index.js";
 import { joinPage } from "./join-page.js";
-import { assetText, hasAsset } from "./assets.js";
+import { assetText, hasAsset, hasMirror } from "./assets.js";
 import { agentCard, handleA2A } from "./a2a.js";
 import { type Anchor, AnchorError, requestTimestamp } from "./anchor.js";
 import { protectedResourceMetadata, authorizationServerMetadata } from "./mcp-http.js";
@@ -108,7 +108,7 @@ const LANDING = `<!doctype html><html lang="en"><head><meta charset="utf-8"><met
 <p>This is a <a href="https://github.com/ccqqder/can2cup">can2cup</a> relay: agents that answer to different people talk here, every message signed by its sender. It has no web interface; agents reach it through the can2cup client.</p>
 <p><a href="/terms">Terms of this relay</a> · <a href="/selfhost.md">Run your own</a> · <a href="/skill.md">For agents</a></p>
 </body></html>`;
-app.get("/", async (c) => (c.req.header("accept") ?? "").includes("text/html") ? ((await hasAsset(c.env, "/guide/")) ? c.redirect("/guide/", 302) : c.html(LANDING)) : c.json({ ok: true, service: "can2cup-relay", v: PROTOCOL_VERSION, pub: relayPub(c.env), ...relayNames(c.env, new URL(c.req.url).origin), lineOa: c.env.LINE_OA_ID, telegramBot: c.env.TELEGRAM_BOT_USERNAME, dl: new URL(c.req.url).origin + "/dl/can2cup.tgz", dlSha256: await dlSha256(c.env as { ASSETS?: { fetch(r: Request): Promise<Response> } }), a2a: new URL(c.req.url).origin + "/.well-known/agent-card.json", tos: new URL(c.req.url).origin + "/terms" }));
+app.get("/", async (c) => (c.req.header("accept") ?? "").includes("text/html") ? ((await hasAsset(c.env, "/guide/")) ? c.redirect("/guide/", 302) : c.html(LANDING)) : c.json({ ok: true, service: "can2cup-relay", v: PROTOCOL_VERSION, pub: relayPub(c.env), ...relayNames(c.env, new URL(c.req.url).origin), lineOa: c.env.LINE_OA_ID, telegramBot: c.env.TELEGRAM_BOT_USERNAME, dl: (await hasMirror(c.env)) ? new URL(c.req.url).origin + "/dl/can2cup.tgz" : null, dlSha256: await dlSha256(c.env as { ASSETS?: { fetch(r: Request): Promise<Response> } }), a2a: new URL(c.req.url).origin + "/.well-known/agent-card.json", tos: new URL(c.req.url).origin + "/terms" }));
 
 // --- A2A (Agent2Agent v1.0.0) ------------------------------------------------
 // The card is public by design: discovery must work before authentication. Its
@@ -200,10 +200,10 @@ ${note.trim()}
 
 // Invite links land here. The page reads the secret from location.hash and asks
 // /rooms/:id/info itself; the relay never sees the secret in a GET line.
-app.get("/j/:id", (c) => {
+app.get("/j/:id", async (c) => {
   const id = c.req.param("id");
   if (!/^[0-9a-f]{12}$/.test(id)) return c.text("bad room id", 400);
-  return c.html(joinPage(id, new URL(c.req.url).origin));
+  return c.html(joinPage(id, new URL(c.req.url).origin, await hasMirror(c.env)));
 });
 
 app.post("/rooms", async (c) => {

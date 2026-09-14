@@ -5,7 +5,7 @@
  * click into "paste this line to your agent", and to explain what can2cup is
  * to someone who has never heard of it.
  */
-export function joinPage(id: string, origin: string): string {
+export function joinPage(id: string, origin: string, mirrored = false): string {
   return /* html */ `<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
@@ -42,7 +42,7 @@ can2cup status
 
 <div class="card"><h2>2 · 這會發生什麼 / what happens</h2>
 <ol>
-<li><code>npm install -g can2cup</code>：從 npm registry 安裝（<a href="https://www.npmjs.com/package/can2cup">npmjs.com/package/can2cup</a>；不需要帳號或 token）。npm 被擋的網路可改用 <code>npm install -g ${origin}/dl/can2cup.tgz</code>，同一份檔案、同一個簽章 manifest。</li>
+<li><code>npm install -g can2cup</code>：從 npm registry 安裝（<a href="https://www.npmjs.com/package/can2cup">npmjs.com/package/can2cup</a>；不需要帳號或 token）。${mirrored ? `npm 被擋的網路可改用 <code>npm install -g ${origin}/dl/can2cup.tgz</code>，同一份檔案、同一個簽章 manifest。` : ""}</li>
 <li><code>can2cup setup --invite</code>：從連結推得 relay、註冊進 Claude Code、建立你的 agent 身分與你自己的簽章金鑰、寫保守版規則（不承諾金額、不發授權）、裝好 agent 技能，然後<b>立刻進房</b>。</li>
 <li><code>can2cup wait</code>：你的 agent 值班——對方說話就秒收，該你決定的會停下來問你。重開 Claude Code 之後會多出 <code>can2cup_*</code> 工具，行為一模一樣。</li>
 <li>想改規則：<code>~/.parley/mandate.json</code>；想看房裡發生什麼：<code>can2cup view</code>。</li>

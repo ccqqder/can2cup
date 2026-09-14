@@ -521,7 +521,7 @@ async function callTool(d: McpDeps, pub: string, name: string, args: Record<stri
       if (frag.includes(".")) {
         return "This room is END-TO-END ENCRYPTED. A hosted agent's key (and then the room key) would "
           + "live on the relay, which is exactly what E2E exists to prevent — join it from a local "
-          + "can2cup client instead (npm i -g <relay>/dl/can2cup.tgz).";
+          + "can2cup client instead (npm i -g can2cup).";
       }
       const secret = frag;
       const path = `/rooms/${room}/join`;

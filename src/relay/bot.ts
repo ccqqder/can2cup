@@ -28,6 +28,7 @@ import type { Bubble, Card, Incoming, Out, Quick, Vocab } from "./channel.js";
 import { COMMAND_NAMES } from "./commands.js";
 import { LANGS, langInfo, normLang } from "../protocol/lang.js";
 import { tr, botLang, BOT_LANGS } from "./i18n.js";
+import { installLine } from "./assets.js";
 
 export const help = (v: Vocab, L: string): string =>
   tr(L, "傳聲罐罐\n用 {chat} 遙控你電腦上的 agent\n\n還沒接上?打 /setup\n把一台電腦上的 agent 接來\n\n/a 文字 → 對 agent 說一句\n/status → 它接上哪些群、在線嗎\n/pause · /resume → 煞車 / 放開\n🌐 /lang → language · 語言\n\n想每句都直通 agent:/agent on\n進階功能:/advance", { chat: v.chat });
@@ -272,7 +273,7 @@ async function setupMessages(uid: string, inc: Incoming, a: Api, ctx: BotCtx): P
   const lang = langInfo(L)?.native ?? L;
   return [
     { text: tr(L, "🌐 {lang}(/lang 可改)\n帶你的 AI 上 can2cup,只要貼一次(約 3 分鐘):\n綁的是「一台電腦」,不是某個視窗:挑一台你常開的,之後上面每個 Claude Code 都是同一個 agent。\n① 那台電腦要有 Node.js 18+，並開著 Claude Code（Codex／Cursor 也可以）\n② 下一則訊息請「整則複製」貼給 agent；它會安裝 can2cup、註冊 MCP、綁定這個 {chat}，並開始值班\n③ 完成後請重啟 Claude Code 一次，can2cup_* 工具才會出現；重啟前仍可直接用 can2cup 指令\n若自動綁定失敗，agent 會顯示 QR，手機掃一次即可。", { lang, chat: v.chat }) },
-    { text: tr(L, "請幫我安裝 can2cup 並完成新手設定。請實際執行下面兩行，不要只解釋：\nnpm i -g {origin}/dl/can2cup.tgz\ncan2cup setup --relay {origin} --name \"{name}\" --link {code}\n\n若 npm 安裝因 EEXIST 失敗（舊的 parley 指令還在），先 `npm rm -g parley` 再裝一次。setup 完成後，立刻用你所在 host 的背景 shell 啟動 `can2cup watch` 值班；watch 有真實訊息才會返回。每次返回後處理內容、需要時用 `can2cup tell` 回覆 {chat}，然後重新啟動背景 watch。最後跑 `can2cup status`，用{lang}告訴我安裝、MCP、{chat} 綁定和值班是否成功，並提醒我方便時重啟 Claude Code。", { origin: ctx.origin, name, code, chat: v.chat, lang }) },
+    { text: tr(L, "請幫我安裝 can2cup 並完成新手設定。請實際執行下面兩行，不要只解釋：\n{install}\ncan2cup setup --relay {origin} --name \"{name}\" --link {code}\n\n若 npm 安裝因 EEXIST 失敗（舊的 parley 指令還在），先 `npm rm -g parley` 再裝一次。setup 完成後，立刻用你所在 host 的背景 shell 啟動 `can2cup watch` 值班；watch 有真實訊息才會返回。每次返回後處理內容、需要時用 `can2cup tell` 回覆 {chat}，然後重新啟動背景 watch。最後跑 `can2cup status`，用{lang}告訴我安裝、MCP、{chat} 綁定和值班是否成功，並提醒我方便時重啟 Claude Code。", { origin: ctx.origin, install: installLine(ctx.origin, await ctx.hasPage("/dl/VERSION")), name, code, chat: v.chat, lang }) },
   ];
 }
 

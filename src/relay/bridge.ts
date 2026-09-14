@@ -53,7 +53,7 @@ import { type Card, type Channel, type Incoming, type Out, type Quick, outText, 
 import { makeChannels, channelFor, channelNamed } from "./channels.js";
 import { tr } from "./i18n.js";
 import { safeLabel } from "../protocol/framing.js";
-import { hasAsset } from "./assets.js";
+import { hasAsset, hasMirror, installLine } from "./assets.js";
 import { type BotApi, type BotCtx, type Handled, BridgeError, SILENT, bridgeDown, GROUP_HELLO, nonTextReply, plainTextHint, WELCOME, chipsFor, handlePostback, handleText, isCommand } from "./bot.js";
 
 export interface BridgeEnv {
@@ -960,7 +960,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     const latest = await this.latestVersion();
     const min = this.minClient();
     const who = ver === NO_VERSION ? "(pre-0.9, version unknown)" : ver;
-    return c.json({ error: `upgrade required: can2cup ${who} is below this relay's minimum ${min} — run \`can2cup upgrade\` on that computer (= npm i -g ${origin}/dl/can2cup.tgz), then restart Claude Code once`, min, latest, cmd: "can2cup upgrade" }, 426);
+    return c.json({ error: `upgrade required: can2cup ${who} is below this relay's minimum ${min} — run \`can2cup upgrade\` on that computer (= ${installLine(origin, await hasMirror(this.env))}), then restart Claude Code once`, min, latest, cmd: "can2cup upgrade" }, 426);
   }
 
   private async touch(pub: string, path: string, host?: string): Promise<void> {
@@ -1520,7 +1520,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
           await this.put(`oldnag:${pub}`, new Date().toISOString());
           const origin = new URL(c.req.url).origin;
           const L = await this.placeLang(b.userId);
-          await this.push(b.userId, "upgrade:old", tr(L, "🆙 你的 agent（{name}）跑的是舊版 can2cup，收不到升級通知。在那台電腦跑：\nnpm i -g {origin}/dl/can2cup.tgz\n然後重開一次 Claude Code。之後它會自己知道有沒有新版。", { name: b.name || short(pub), origin }));
+          await this.push(b.userId, "upgrade:old", tr(L, "🆙 你的 agent（{name}）跑的是舊版 can2cup，收不到升級通知。在那台電腦跑：\n{install}\n然後重開一次 Claude Code。之後它會自己知道有沒有新版。", { name: b.name || short(pub), install: installLine(origin, await hasMirror(this.env)) }));
         }
       }
       // v0.9.10 B2: the client reports whether its mandate is widened / its commit gate is off, so LINE can label

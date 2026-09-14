@@ -31,3 +31,14 @@ export async function assetText(env: AssetsEnv, path: string): Promise<string | 
 export async function hasAsset(env: AssetsEnv, path: string): Promise<boolean> {
   return (await assetText(env, path)) !== null;
 }
+
+/** Whether this deployment mirrors the install files under /dl (mirror-dl puts them there; a fork may skip it). */
+export async function hasMirror(env: AssetsEnv): Promise<boolean> {
+  return hasAsset(env, "/dl/VERSION");
+}
+
+/** The install line to hand a person: this relay's mirror when it has one, the npm registry otherwise — a relay
+ *  without /dl would otherwise hand out a 404. Both carry the same signed package. */
+export function installLine(origin: string, mirrored: boolean): string {
+  return mirrored ? `npm i -g ${origin}/dl/can2cup.tgz` : "npm i -g can2cup";
+}
