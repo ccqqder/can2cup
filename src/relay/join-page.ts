@@ -51,7 +51,7 @@ can2cup status
 <div class="card"><h2>3 · 這是什麼 / what this is</h2>
 <p style="margin:0 0 8px">兩個人各自的 AI agent 在同一間房裡對談：每則訊息由各自的 agent 簽章、串成可離線驗證的鏈；你設定的額度與禁止外流的字串，在訊息出站前就被你自己那端擋下；你的 agent 寫給你的私有理由不會上傳。房只做傳話，<b>不會碰你的機器</b>——對方 agent 說「跑這個」，跑不跑仍是你那邊 agent 自己的權限提示。</p>
 <div class="warn">這條連結就是房間的鑰匙：拿到連結的人都能讀、能發。像對待 Telegram 群組邀請連結一樣對待它，別公開貼。relay 目前看得到明文（尚無端對端加密），只跟你信任的人用。</div>
-<p class="mute" style="font-size:13px;margin:10px 0 0">Background: <a style="color:var(--accent)" href="https://peachpitboat.com/zh-tw/posts/parenting-agent/">parenting agent</a> · <a style="color:var(--accent)" href="https://peachpitboat.com/zh-tw/posts/parley-poc/">can2cup POC</a></p>
+<p class="mute" style="font-size:13px;margin:10px 0 0">Source: <a style="color:var(--accent)" href="https://github.com/ccqqder/can2cup">github.com/ccqqder/can2cup</a></p>
 </div>
 
 <div class="card"><h2>room</h2><div id="info" class="mute">loading…</div></div>

@@ -16,8 +16,8 @@ export interface LineEnv {
   LINE_CHANNEL_ACCESS_TOKEN?: string;
   LINE_OA_ID?: string;
   PUSH_BUDGET?: string;       // v0.15.1: this channel's monthly push allowance (LINE free plan: 200; default 180)
-  LINE_MENU_CONSOLE?: string; // rich menu name prefix for bound users; default lilinene-menu-console
-  LINE_MENU_ONBOARD?: string; // … for everyone else; default lilinene-menu-onboard
+  LINE_MENU_CONSOLE?: string; // rich menu name prefix for bound users; default can2cup-menu-console
+  LINE_MENU_ONBOARD?: string; // … for everyone else; default can2cup-menu-onboard
 }
 
 /** Rich-menu ids and per-user menu state are cached by the caller (the DO) — the adapter is stateless apart from
@@ -158,13 +158,13 @@ export class LineChannel implements Channel {
 
   // ---- rich menu (per-user console / onboard) ------------------------------------------------
   private async menuId(which: "console" | "onboard"): Promise<string | undefined> {
-    const prefix = which === "console" ? (this.env.LINE_MENU_CONSOLE ?? "lilinene-menu-console") : (this.env.LINE_MENU_ONBOARD ?? "lilinene-menu-onboard");
+    const prefix = which === "console" ? (this.env.LINE_MENU_CONSOLE ?? "can2cup-menu-console") : (this.env.LINE_MENU_ONBOARD ?? "can2cup-menu-onboard");
     if (!this.menuIds || Date.now() - this.menuIds.at > 3600_000) {
       const ids: Record<string, string> = {};
       try {
         const r = await this.api("/richmenu/list", undefined, "GET");
         if (r.ok) for (const m of (((await r.json()) as { richmenus?: Array<{ richMenuId: string; name: string }> }).richmenus ?? [])) {
-          for (const p of [this.env.LINE_MENU_CONSOLE ?? "lilinene-menu-console", this.env.LINE_MENU_ONBOARD ?? "lilinene-menu-onboard"]) if (m.name.startsWith(p) && !ids[p]) ids[p] = m.richMenuId;
+          for (const p of [this.env.LINE_MENU_CONSOLE ?? "can2cup-menu-console", this.env.LINE_MENU_ONBOARD ?? "can2cup-menu-onboard"]) if (m.name.startsWith(p) && !ids[p]) ids[p] = m.richMenuId;
         }
       } catch { /* menus are decoration */ }
       this.menuIds = { at: Date.now(), ids };

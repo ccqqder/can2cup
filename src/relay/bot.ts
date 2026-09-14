@@ -31,8 +31,13 @@ import { tr, botLang, BOT_LANGS } from "./i18n.js";
 
 export const help = (v: Vocab, L: string): string =>
   tr(L, "傳聲罐罐\n用 {chat} 遙控你電腦上的 agent\n\n還沒接上?打 /setup\n把一台電腦上的 agent 接來\n\n/a 文字 → 對 agent 說一句\n/status → 它接上哪些群、在線嗎\n/pause · /resume → 煞車 / 放開\n🌐 /lang → language · 語言\n\n想每句都直通 agent:/agent on\n進階功能:/advance", { chat: v.chat });
-export const advanced = (v: Vocab, L: string): string =>
-  tr(L, "進階功能\n/show → 看最近的對話\n/join 碼 → 用邀請碼加入對話\n/room 名稱 → 群裡打:把這個群接上\n/mirror · /unmirror → 只貼決策 / 不貼\n/quiet · /unquiet → 群裡打 /a 之後要不要回執\n/ask → 沒綁定的人也能問群裡那個 agent\n/agent on|off → 每句直通 agent\n/lang → 語言(我和你的 agent 用哪種語言)\n/quota → 本月推播用量\n/keep 永久 → 綁定不因 agent 久沒出現而解除\n/link 碼 → 重新綁定\n/unbind → 解除 1:1 綁定(其他綁定留著)\n/forgetme → 解除全部綁定並刪光我的資料\n\n不經 {chat}:兩台電腦的 agent 可直接\n對談。在 Claude Code 對它說\n「開一個 can2cup 對話給我邀請碼」\n這種對話 {chat} 上不會列出。\n\n完整說明:can2cup.com/guide\n隱私:can2cup.com/privacy\n給 agent 讀:can2cup.com/skill.md", { chat: v.chat });
+/** v0.18.0: the links follow the relay that answers (a fork is not can2cup.com), and the guide / privacy lines are
+ *  left out on a relay that does not ship those pages — they belong to the operator, skill.md to every relay. */
+export const advanced = (v: Vocab, L: string, origin: string, pages: { guide: boolean; privacy: boolean }): string =>
+  [tr(L, "進階功能\n/show → 看最近的對話\n/join 碼 → 用邀請碼加入對話\n/room 名稱 → 群裡打:把這個群接上\n/mirror · /unmirror → 只貼決策 / 不貼\n/quiet · /unquiet → 群裡打 /a 之後要不要回執\n/ask → 沒綁定的人也能問群裡那個 agent\n/agent on|off → 每句直通 agent\n/lang → 語言(我和你的 agent 用哪種語言)\n/quota → 本月推播用量\n/keep 永久 → 綁定不因 agent 久沒出現而解除\n/link 碼 → 重新綁定\n/unbind → 解除 1:1 綁定(其他綁定留著)\n/forgetme → 解除全部綁定並刪光我的資料\n\n不經 {chat}:兩台電腦的 agent 可直接\n對談。在 Claude Code 對它說\n「開一個 can2cup 對話給我邀請碼」\n這種對話 {chat} 上不會列出。", { chat: v.chat }),
+    [pages.guide ? tr(L, "完整說明:{origin}/guide", { origin }) : "",
+      pages.privacy ? tr(L, "隱私:{origin}/privacy", { origin }) : "",
+      tr(L, "給 agent 讀:{origin}/skill.md", { origin })].filter(Boolean).join("\n")].join("\n\n");
 export const notBound = (L: string): string => tr(L, "還沒接上 agent。\n私訊我打 /setup,到一台你常開的電腦上貼一次,安裝、綁定、值班一次完成。\n綁的是那台電腦,不是某個視窗;綁好後用「/a 文字」下指令。");
 export const bridgeDown = (L: string): string => tr(L, "can2cup bridge 現在連不上,等等再試 🙏");
 /** What a bound person gets for a plain sentence when /agent mode is off. The old bot handed this to an LLM; the
@@ -111,6 +116,7 @@ export interface BotCtx {
   userName(userId: string, groupId?: string): Promise<string | undefined>;
   groupName(groupId: string): Promise<string | undefined>;
   groupTranscript(groupId: string): Promise<string>; // recent group chat, for /context on
+  hasPage(path: string): Promise<boolean>;         // v0.18.0: does this relay ship that static page (guide, privacy are the operator's)
 }
 
 type J = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -307,7 +313,7 @@ async function runCommand(head: string, rest: string, inc: Incoming, a: Api, ctx
   const gid = isGroup ? inc.place.id : undefined;
   const gname = async (g?: string) => (g ? ctx.groupName(g) : undefined);
   const myName = () => ctx.userName(uid, gid);
-  if (head === "/advance") return t(advanced(v, L));
+  if (head === "/advance") return t(advanced(v, L, ctx.origin, { guide: await ctx.hasPage("/guide/"), privacy: await ctx.hasPage("/privacy/") }));
   // v0.9.5: the way out. Confirmation = retyping the word in the same message — no pending state a restart could lose.
   if (head === "/unbind" || head === "/forgetme") {
     if (isGroup) return t(tr(L, "這要在跟我的 1 對 1 聊天裡做。點我的頭像進私訊,再打一次。"));

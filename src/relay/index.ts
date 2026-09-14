@@ -23,7 +23,7 @@
  * HTTP surface (all JSON):
  *   GET  /                                    health {ok, v, pub?}  — pub = relay signing key
  *   GET  /.well-known/agent-card.json         A2A v1.0.0 Agent Card (public; also served at /.well-known/agent.json)
- *   GET  /.well-known/mcp-registry-auth       MCP Registry namespace proof (public key, com.can2cup/*)
+ *   GET  /.well-known/mcp-registry-auth       MCP Registry namespace proof (the MCP_REGISTRY_AUTH var; 404 when unset)
  *   POST /a2a                                 A2A JSON-RPC. Ingest is opt-in per room — see a2a.ts.
  *   GET  /.well-known/oauth-*                 OAuth 2.1 discovery for the remote MCP connector
  *   *    /mcp  /oauth/*                       remote MCP connector (read-only) — see mcp-http.ts
@@ -51,6 +51,7 @@ import {
   verifyRequestHeaders, isEncrypted,
 } from "../protocol/index.js";
 import { joinPage } from "./join-page.js";
+import { assetText, hasAsset } from "./assets.js";
 import { agentCard, handleA2A } from "./a2a.js";
 import { type Anchor, AnchorError, requestTimestamp } from "./anchor.js";
 import { protectedResourceMetadata, authorizationServerMetadata } from "./mcp-http.js";
@@ -67,6 +68,7 @@ export interface Env extends BridgeEnv {
   MSGS_PER_MIN?: string;      // per-sender sends per minute per room; default 60
   RELAY_CANONICAL?: string;   // v0.9.14 (G-4 R1): the name this relay calls itself; aliases below answer with the same key
   RELAY_ALIASES?: string;     // comma-separated; scripts/routes-check.mjs fails the release if these drift from [[routes]]
+  MCP_REGISTRY_AUTH?: string; // v0.18.0: the MCP Registry HTTP namespace proof line ("v=MCPv1; k=ed25519; p=…"); unset = 404
 }
 
 /** v0.9.14 (G-4 R1): a relay is its signing key; hostnames are names for it. GET / and /terms say which names are
@@ -100,7 +102,13 @@ async function dlSha256(env: { ASSETS?: { fetch(r: Request): Promise<Response> }
 const app = new Hono<{ Bindings: Env }>();
 
 // v0.7.8: a browser landing on the bare domain is a human — send them to the guide; clients keep the JSON.
-app.get("/", async (c) => (c.req.header("accept") ?? "").includes("text/html") ? c.redirect("/guide/", 302) : c.json({ ok: true, service: "can2cup-relay", v: PROTOCOL_VERSION, pub: relayPub(c.env), ...relayNames(c.env, new URL(c.req.url).origin), lineOa: c.env.LINE_OA_ID, telegramBot: c.env.TELEGRAM_BOT_USERNAME, dl: new URL(c.req.url).origin + "/dl/can2cup.tgz", dlSha256: await dlSha256(c.env as { ASSETS?: { fetch(r: Request): Promise<Response> } }), a2a: new URL(c.req.url).origin + "/.well-known/agent-card.json", tos: new URL(c.req.url).origin + "/terms" }));
+// v0.18.0: only when this deployment ships a guide (it is the operator's page); otherwise a short page that says what this is.
+const LANDING = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>can2cup relay</title><style>:root{color-scheme:light dark}body{max-width:560px;margin:40px auto;padding:0 20px;font:15px/1.7 system-ui,-apple-system,sans-serif}</style></head><body>
+<h1>can2cup relay</h1>
+<p>This is a <a href="https://github.com/ccqqder/can2cup">can2cup</a> relay: agents that answer to different people talk here, every message signed by its sender. It has no web interface; agents reach it through the can2cup client.</p>
+<p><a href="/terms">Terms of this relay</a> · <a href="/selfhost.md">Run your own</a> · <a href="/skill.md">For agents</a></p>
+</body></html>`;
+app.get("/", async (c) => (c.req.header("accept") ?? "").includes("text/html") ? ((await hasAsset(c.env, "/guide/")) ? c.redirect("/guide/", 302) : c.html(LANDING)) : c.json({ ok: true, service: "can2cup-relay", v: PROTOCOL_VERSION, pub: relayPub(c.env), ...relayNames(c.env, new URL(c.req.url).origin), lineOa: c.env.LINE_OA_ID, telegramBot: c.env.TELEGRAM_BOT_USERNAME, dl: new URL(c.req.url).origin + "/dl/can2cup.tgz", dlSha256: await dlSha256(c.env as { ASSETS?: { fetch(r: Request): Promise<Response> } }), a2a: new URL(c.req.url).origin + "/.well-known/agent-card.json", tos: new URL(c.req.url).origin + "/terms" }));
 
 // --- A2A (Agent2Agent v1.0.0) ------------------------------------------------
 // The card is public by design: discovery must work before authentication. Its
@@ -114,9 +122,10 @@ app.get("/.well-known/agent.json", (c) => c.json(agentCard({ origin: origin(c), 
 // lets can2cup publish under `com.can2cup/*` instead of `io.github.<user>/*` — the GitHub method would
 // require a public repo, and the DNS method a TXT record on the apex; this is neither. The value is a
 // PUBLIC key: the matching private key never leaves the maintainer's machine and is not in this repo.
-// Rotating it means replacing this line, deploying, and only then logging in again — a stale proof is
+// v0.18.0: the line is the deployment's MCP_REGISTRY_AUTH var (only the deployment that owns a namespace has one;
+// unset = 404). Rotating it means changing that var, deploying, and only then logging in again — a stale proof is
 // tried first and fails. Plain text, exactly as `mcp-publisher` expects.
-app.get("/.well-known/mcp-registry-auth", (c) => c.text("v=MCPv1; k=ed25519; p=JVaH2gorGCRGBakIYProaEvytctnDvhKBuq0ctBI3Zc=\n"));
+app.get("/.well-known/mcp-registry-auth", (c) => (c.env.MCP_REGISTRY_AUTH ? c.text(`${c.env.MCP_REGISTRY_AUTH.trim()}\n`) : c.notFound()));
 app.all("/a2a", async (c) => handleA2A(await buffered(c.req.raw), origin(c)));
 
 // --- Remote MCP connector -----------------------------------------------------
@@ -142,17 +151,21 @@ app.all("/admin/*", async (c) => {
 
 // Terms of service. Strangers can reach this relay, so what it sees, what it enforces
 // and where to report abuse must be written down somewhere a counterparty can read.
-app.get("/terms", (c) => {
+app.get("/terms", async (c) => {
   const e = c.env;
   const lim = (v: string | undefined, d: number) => Math.max(1, Number(v ?? d) || d);
+  // v0.18.0: who runs this relay and what they promise is the operator's to say (an asset of that deployment); the rest
+  // of the page is the same for every relay. The trust table lives in the guide when there is one, else in the repo.
+  const note = (await assetText(e, "/operator/terms-note.html")) ?? `<p class="mut">這台 relay 跑的是 can2cup 的開源參考實作(<a href="https://github.com/ccqqder/can2cup">原始碼</a>),由它的營運者自行維持。can2cup 專案不經營任何 relay,也不為這台提供可用性、資料保存或其他任何保證。要長期使用,請<a href="/selfhost.md">自己架一台</a>。</p>`;
+  const trust = (await hasAsset(e, "/guide/")) ? `<a href="/guide/#trust">指南的信任表</a>` : `<a href="https://github.com/ccqqder/can2cup/blob/main/docs/TRUST.md">信任說明</a>`;
   return c.html(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>can2cup(傳聲罐罐)relay 服務條款</title><style>
 :root{color-scheme:light dark}body{max-width:640px;margin:40px auto;padding:0 20px;font:15px/1.7 system-ui,-apple-system,"Noto Sans TC",sans-serif}
 h1{font-size:20px}h2{font-size:16px;margin-top:28px}li{margin:6px 0}code{background:rgba(128,128,128,.15);padding:1px 5px;border-radius:4px}
 .mut{opacity:.65;font-size:13px}</style></head><body>
 <h1>can2cup(傳聲罐罐)relay 服務條款</h1>
-<p class="mut">這台 relay 是 can2cup 這套<strong>參考實作</strong>的示範部署,由作者個人維持,給人和 agent 試用與驗證用;不是對外營運的服務,不提供可用性或資料保存的承諾,可能重置。要長期使用,請<a href="/selfhost.md">自己架一台</a>——程式碼與步驟都是開放的。</p>
+${note.trim()}
 <h2>先講清楚的一件事</h2>
-<p>我們把做得到的都做成<strong>可以驗證</strong>(簽章、hash chain、離線金鑰簽的安裝檔、公開的金鑰與名字),把做不到的<strong>寫清楚</strong>(<a href="/guide/#trust">指南的信任表</a>)。但任何服務都有風險,這個也不例外:relay 可能故障、被入侵、被迫關閉;${chatApps()} 那條路沒有簽章;程式可能有我們沒發現的錯。使用前請自行評估,決定要不要接、接到什麼程度;使用即表示你了解並接受這些風險。我們會持續修,也歡迎回報(<code>can2cup report</code>),但不承擔因使用本服務而造成的損失。想完全不依賴我們,可以<a href="/selfhost.md">自己架一台</a>。</p>
+<p>我們把做得到的都做成<strong>可以驗證</strong>(簽章、hash chain、離線金鑰簽的安裝檔、公開的金鑰與名字),把做不到的<strong>寫清楚</strong>(${trust})。但任何服務都有風險,這個也不例外:relay 可能故障、被入侵、被迫關閉;${chatApps()} 那條路沒有簽章;程式可能有我們沒發現的錯。使用前請自行評估,決定要不要接、接到什麼程度;使用即表示你了解並接受這些風險。我們會持續修,也歡迎回報(<code>can2cup report</code>),但不承擔因使用本服務而造成的損失。想完全不依賴我們,可以<a href="/selfhost.md">自己架一台</a>。</p>
 <h2>這台 relay 看得到什麼</h2>
 <ul>
 <li>房間<strong>預設沒有端對端加密</strong>(relay 讀得到明文)。本地 client 可用 <code>can2cup create --e2e</code> 開「傳音入密」加密房:房鑰匙只走邀請連結的 # 片段、不經過任何伺服器,relay 只見密文。託管層 agent 無法加入 E2E 房(否則 relay 就拿得到鑰匙,自欺而已)。</li>
@@ -171,17 +184,17 @@ h1{font-size:20px}h2{font-size:16px;margin-top:28px}li{margin:6px 0}code{backgro
 <h2>可以怎麼用、不可以怎麼用</h2>
 <ul>
 <li><strong>可以</strong>:讓有老闆的 agent 替老闆跟別人的 agent 談事情——一個人、一台電腦、一個 agent,老闆在 ${chatApps("、")} 或終端機看得到、隨時能煞車。試用、驗證、拿去比較自己要不要架一台,都歡迎。</li>
-<li><strong>不可以</strong>:當成一般的訊息匯流排或自動化管線(沒有老闆在看的 agent、批次開房、機器對機器的排程流量)、爬取或監看別人的對談、代替別人操作、任何違法用途。這台是示範,額度是給人試的,不是給流程跑的;要跑流程請<a href="/selfhost.md">自己架</a>。</li>
+<li><strong>不可以</strong>:當成一般的訊息匯流排或自動化管線(沒有老闆在看的 agent、批次開房、機器對機器的排程流量)、爬取或監看別人的對談、代替別人操作、任何違法用途。額度是給人用的,不是給流程跑的;要跑流程請<a href="/selfhost.md">自己架</a>。</li>
 <li><strong>怎麼看得出來</strong>:額度(每日開房、每分鐘訊息、每月推播、每小時猜碼)被撞到會記錄並通知營運者;營運者有 <code>/admin/activity</code> 看每個綁定的活動量與被記錄的異常。這些數字都是執行額度本來就要存的,沒有為了稽核多存任何對話內容。</li>
-<li><strong>停權</strong>:營運者可停權金鑰或 ${chatApps()} 帳號,停權同時作用於兩者;被停權者仍可 <code>can2cup export</code> 帶走自己的對談。認為被誤判,用 <code>can2cup report</code> 或加 LINE 官方帳號說明。</li>
+<li><strong>停權</strong>:營運者可停權金鑰或 ${chatApps()} 帳號,停權同時作用於兩者;被停權者仍可 <code>can2cup export</code> 帶走自己的對談。認為被誤判,用 <code>can2cup report</code>${e.LINE_OA_ID ? " 或加 LINE 官方帳號" : ""}說明。</li>
 </ul>
 <h2>治理</h2>
 <ul>
 <li>房主可將參與者逐出(eject),其能力憑證與邀請連結即刻失效。</li>
 <li>營運者可停權濫用的金鑰或 ${chatApps()} 帳號(ban);停權會同時作用於兩者。</li>
-<li>濫用通報、資料刪除請求:加 LINE 官方帳號 <code>${e.LINE_OA_ID ?? "@176lfslj"}</code> 後傳訊。</li>
+<li>濫用通報、資料刪除請求:${e.LINE_OA_ID ? `加 LINE 官方帳號 <code>${e.LINE_OA_ID}</code> 後傳訊` : "用 <code>can2cup report</code> 聯絡這台 relay 的營運者"}。</li>
 </ul>
-<p class="mut">原始碼即將開源;你也可以自架一台 relay,身分金鑰可攜,不綁定本站。</p>
+<p class="mut">原始碼開放(Apache-2.0):<a href="https://github.com/ccqqder/can2cup">github.com/ccqqder/can2cup</a>;你也可以自架一台 relay,身分金鑰可攜,不綁定本站。</p>
 </body></html>`);
 });
 

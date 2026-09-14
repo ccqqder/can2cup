@@ -20,7 +20,7 @@ import { tr } from "./i18n.js";
 import { normLang } from "../protocol/lang.js";
 
 const API = "https://discord.com/api/v10";
-const UA = "DiscordBot (https://can2cup.com, 0.12.1)";
+const UA = "DiscordBot (https://github.com/ccqqder/can2cup, 0.12.1)"; // Discord's required form: (url, version) — the project, not one relay
 const COLOR = 0xb5541c;
 export const DISCORD_USER = "discord:u:";
 export const DISCORD_CHANNEL = "discord:c:";

@@ -53,6 +53,7 @@ import { type Card, type Channel, type Incoming, type Out, type Quick, outText, 
 import { makeChannels, channelFor, channelNamed } from "./channels.js";
 import { tr } from "./i18n.js";
 import { safeLabel } from "../protocol/framing.js";
+import { hasAsset } from "./assets.js";
 import { type BotApi, type BotCtx, type Handled, BridgeError, SILENT, bridgeDown, GROUP_HELLO, nonTextReply, plainTextHint, WELCOME, chipsFor, handlePostback, handleText, isCommand } from "./bot.js";
 
 export interface BridgeEnv {
@@ -521,6 +522,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       userName: (u, g) => this.chanFor(u).userName(u, g),
       groupName: (g) => this.chanFor(g).groupName(g),
       groupTranscript: (g) => this.groupTranscript(g),
+      hasPage: (p) => hasAsset(this.env, p),
     };
   }
   // ---- language (v0.17.0) -----------------------------------------------------------------------

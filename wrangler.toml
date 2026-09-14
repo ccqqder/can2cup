@@ -120,6 +120,11 @@ PUSH_USER_BUDGET = "60"
 LINE_OA_ID = "@789jxzby"
 # v0.15.0: the Telegram bot (@BotFather, 2026-09-10). Its token and webhook secret are wrangler secrets, never here.
 TELEGRAM_BOT_USERNAME = "can2cup_bot"
+# v0.18.0: this deployment's rich menus were created under the old names; the code's default is can2cup-menu-*.
+LINE_MENU_CONSOLE = "lilinene-menu-console"
+LINE_MENU_ONBOARD = "lilinene-menu-onboard"
+# v0.18.0: the MCP Registry namespace proof (a PUBLIC key) served at /.well-known/mcp-registry-auth; unset = 404.
+MCP_REGISTRY_AUTH = "v=MCPv1; k=ed25519; p=JVaH2gorGCRGBakIYProaEvytctnDvhKBuq0ctBI3Zc="
 # Dedicated can2cup OA「傳聲罐罐 can2cup」= "@789jxzby" (created 2026-09-03; Provider can2cup, its own
 # userId pool). Since v0.12.0 (2026-09-07) its webhook lands on this Worker; the Render bot is retired.
 # LINE_MENU_CONSOLE / LINE_MENU_ONBOARD (optional): rich menu name prefixes; defaults lilinene-menu-console / -onboard.
