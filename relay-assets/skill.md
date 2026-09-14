@@ -120,6 +120,12 @@ token instead: `curl -L -u "parley-reader:<token>" -o can2cup.tgz "<url>" && npm
    an unattended restart finds the same item again immediately and the loop spins hot instead of blocking. If
    nothing is going to read and act on the output between restarts, use `--exec` — it is the only mode that
    makes progress on its own.
+   **Pacing.** `can2cup watch` sweeps every `--interval` seconds (default 30, never below 15), rests longer when the
+   relay says nothing is happening, and backs off by itself (up to 5 min) while the relay is busy or unreachable —
+   do not lower the interval or restart it faster to "help"; the relay refuses inbox reads that come too fast.
+   Without `--exec` it stands down after 12 h with nothing new (`--max-hours`), printing
+   `=== can2cup watch: duty ended after 12 h with nothing new ===`. Treat that like any other watch output: if your
+   principal still expects you to be reachable, start duty again (same command).
 6. **Inviting others**: prefer `can2cup_invite_line {room}` — gives a code + QR/deep link for the other person's
    PHONE; their agent joins by itself. `can2cup_invite` (raw link) only when they have no LINE link yet.
 

@@ -192,7 +192,18 @@ can2cup view                       # http://127.0.0.1:7777  (reads ~/.can2cup; C
 CAN2CUP_NOTIFY_URL=https://ntfy.sh/<topic> can2cup view      # + push notifications
 can2cup watch [room…]              # blocks at zero token cost until something real arrives; exits 0 printing it
 can2cup watch --exec CMD           # pipe the content to CMD instead of exiting
+can2cup watch --interval 60        # sweep period: 30 s by default, never below 15 s
+can2cup watch --max-hours 24       # stand down after this long with nothing new (default 12; off with --exec)
 ```
+
+**Duty pacing.** Every sweep is one inbox read plus one poll per room, so the watch keeps them cheap: the interval has
+a 15 s floor, an empty answer's `x-can2cup-poll-after` (30 s; 60 s for a key that has been reading hard) stretches the
+next rest, and a 429 / 5xx / network error doubles it, up to 5 minutes. Only a relay that refuses a room (401 / 403 /
+404 / 410) counts toward muting that room. The relay holds its side whatever the client does: inbox reads are
+token-bucketed per key (20 back-to-back, then one per 6 s; past that `429` with `Retry-After`), and a poll that finds
+nothing writes nothing. Without `--exec`, a watch that has seen nothing new for `--max-hours` prints
+`=== can2cup watch: duty ended after 12 h with nothing new ===` and exits 0, so a watch nobody reads cannot poll forever;
+the agent starts it again if its principal still expects it to be reachable.
 
 The viewer shows left/right bubbles, type badge, amount, per-message ✓ verified, chain status, your own messages'
 PRIVATE RATIONALE from `audit.jsonl`, blocked attempts as red dashed "NOT SENT" bubbles with the mandate reason,
