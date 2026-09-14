@@ -47,7 +47,7 @@ import QRCode from "qrcode";
 import { encodeInvite, encodeInviteUrl, genesis, lineDeepLink, pubFromPriv, short, signPrincipal, signSealedBid, type RoomExport, type SignedPrincipalMsg, chatAppLabel } from "../protocol/index.js";
 import { HOME, DEFAULT_RELAY, RELAY_KEY, type LocalRoom, loadIdentity, loadRooms, saveRoom, loadMandate, isPaused, loadPrincipal, createPrincipal, loadInboxCursor, saveInstalled, loadUpgradeNag, loadSoul, soulFile, saveMechLocal } from "../mcp/state.js";
 import { relay, bridge, principalApi, dashboardLines, RelayError, takePollHint } from "../mcp/relay-client.js";
-import { changelogFlags } from "../mcp/version.js";
+import { changelogFlags, isPrereleaseRange } from "../mcp/version.js";
 import { RELEASE_PUBS, RELEASE_TARBALL, verifyManifest, type ReleaseManifest } from "../protocol/release.js";
 import { PACKAGE_NAME, advertisedLatest, fetchBytes, fetchText, isVersion, npmLatest, npmRegistry, releaseBase, releasePage, sourceOverrides } from "./upgrade-source.js";
 /** v0.10.0: the release keys this client trusts. CAN2CUP_RELEASE_PUBS (comma-separated) overrides — dev and smoke only;
@@ -580,13 +580,19 @@ async function main(): Promise<void> {
         }
         if (want && !changelogFrom) rangeUnverified = tried.join("; ");
         if (changelogFrom) console.error(`changelog: ${changelogFrom} (sha256 matches the signed manifest)`);
+        // changelogFlags and cmpSemver compare x.y.z only (1.2.3-beta.1 → 1.2.3 would skip a flagged 1.2.3-rc.1), so a
+        // range with a prerelease at either end is unverified whatever the changelog says.
+        if (isPrereleaseRange(VERSION, manifest.version)) rangeUnverified = [rangeUnverified, `${VERSION} → ${manifest.version} involves a prerelease, and prerelease ranges are not checked line by line`].filter(Boolean).join("; ");
       } else {
         // --allow-unsigned: there is no manifest to check a changelog against — the relay's copy, unverified, as before.
         const t = await getText("/changelog.txt");
         if (t) { flags = changelogFlags(t, VERSION, latest || null); changelogFrom = `${DEFAULT_RELAY}/changelog.txt`; }
       }
-      if (manifest?.permissionChange && !flags.some((f) => /PERMISSION CHANGE/.test(f))) flags.push(`${manifest.version}: !! PERMISSION CHANGE (declared in the signed manifest)`);
-      if (manifest?.dataFlowChange && !flags.some((f) => /DATA FLOW/.test(f))) flags.push(`${manifest.version}: !! DATA FLOW (declared in the signed manifest)`);
+      // The target's own two flags describe the step INTO that version: `upgrade --force` onto the version already
+      // installed crosses no release, so they apply only when the target is strictly newer.
+      const targetNewer = !!manifest && cmpSemver(manifest.version, VERSION) > 0;
+      if (targetNewer && manifest?.permissionChange && !flags.some((f) => /PERMISSION CHANGE/.test(f))) flags.push(`${manifest.version}: !! PERMISSION CHANGE (declared in the signed manifest)`);
+      if (targetNewer && manifest?.dataFlowChange && !flags.some((f) => /DATA FLOW/.test(f))) flags.push(`${manifest.version}: !! DATA FLOW (declared in the signed manifest)`);
       const target = manifest?.version || latest || "the version the relay serves";
       const readAt = (manifest && releasePage(manifest.version)) || changelogFrom || manifestFrom || `${DEFAULT_RELAY}/changelog.txt`;
       const unverifiedLine = rangeUnverified ? `The changes between can2cup ${VERSION} and ${target} could not be verified against the signed manifest (${rangeUnverified}): a release in between may change who may do what, or where data goes, without this command seeing its !! line. Read them at ${readAt}.` : "";

@@ -89,12 +89,32 @@ export async function npmLatest(ms = 10000): Promise<string | null> {
   } catch { return null; }
 }
 
-/** GET an absolute URL as raw bytes (a hash must see exactly what was served). `why` as in fetchText. */
-export async function fetchBytes(url: string, ms = 10000): Promise<{ bytes: Buffer | null; why: string }> {
+/** The most fetchBytes reads from one URL: a changelog is a few hundred KiB, and a source must not make the client
+ *  buffer whatever it chooses to send. */
+export const FETCH_CAP = 2 * 1024 * 1024;
+
+/** GET an absolute URL as raw bytes (a hash must see exactly what was served), at most `cap` bytes: a Content-Length
+ *  over the cap is refused before reading, and the body is counted as it is read and abandoned past the cap. A capped
+ *  fetch returns no bytes, like any other failure. `why` as in fetchText. */
+export async function fetchBytes(url: string, ms = 10000, cap = FETCH_CAP): Promise<{ bytes: Buffer | null; why: string }> {
+  const capLabel = cap % (1024 * 1024) === 0 ? `${cap / (1024 * 1024)} MiB` : `${cap} byte`;
   try {
     const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(ms) });
-    if (!r.ok) return { bytes: null, why: `HTTP ${r.status}` };
-    return { bytes: Buffer.from(await r.arrayBuffer()), why: "" };
+    if (!r.ok) { await r.body?.cancel().catch(() => {}); return { bytes: null, why: `HTTP ${r.status}` }; }
+    const len = Number(r.headers.get("content-length") ?? "");
+    if (Number.isFinite(len) && len > cap) { await r.body?.cancel().catch(() => {}); return { bytes: null, why: `Content-Length ${len} is over the ${capLabel} cap` }; }
+    if (!r.body) return { bytes: Buffer.alloc(0), why: "" };
+    const reader = r.body.getReader();
+    const parts: Uint8Array[] = [];
+    let n = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      n += value.byteLength;
+      if (n > cap) { await reader.cancel().catch(() => {}); return { bytes: null, why: `the body ran past the ${capLabel} cap` }; }
+      parts.push(value);
+    }
+    return { bytes: Buffer.concat(parts), why: "" };
   } catch (e) {
     const err = e as { cause?: { code?: string }; message?: string };
     return { bytes: null, why: err.cause?.code ?? err.message ?? String(e) };

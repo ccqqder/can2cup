@@ -28,6 +28,7 @@ import path from "node:path";
 import { spawn as spawnChild, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import http from "node:http";
+import { isPrereleaseRange } from "../mcp/version.js";
 import { newKeypair, signPrincipal, decodeInvite, encodeInvite, sign, computeHash, genesis, randomHex, signHex, signingBytes, signRequestHeaders, canon, verifyChain, PROTOCOL_VERSION, signAgentClaim, agentClaimSigningBytes } from "../protocol/index.js";
 
 const RELAY = process.env.RELAY ?? "http://127.0.0.1:8787";
@@ -935,12 +936,14 @@ expect(hostsRes.ok && Object.values(hosts.hosts).some((h) => h.agents > 0), "/ad
 type FakeFiles = Record<string, string>;
 // `files` may be a function of the server's own URL (a fake npm registry names its tarball by absolute URL); `headers`
 // go on every reply (a relay without /dl still says x-can2cup-latest).
-const withFakeRelay = async (files: FakeFiles | ((url: string) => FakeFiles), fn: (url: string) => Promise<void>, headers: Record<string, string> = {}): Promise<void> => {
+// `chunked` paths are sent without a Content-Length (a client that abandons the body mid-stream is not an error here).
+const withFakeRelay = async (files: FakeFiles | ((url: string) => FakeFiles), fn: (url: string) => Promise<void>, headers: Record<string, string> = {}, chunked: string[] = []): Promise<void> => {
   let table: FakeFiles = {};
   const srv = http.createServer((req, res) => {
+    req.socket.on("error", () => {}); res.on("error", () => {});
     for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
     const p = (req.url ?? "/").split("?")[0];
-    if (p in table) { res.end(table[p]); return; }
+    if (p in table) { if (chunked.includes(p)) { res.write(table[p]); res.end(); } else res.end(table[p]); return; }
     if (p === "/") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true, service: "can2cup-relay", v: 1 })); return; }
     res.statusCode = 404; res.end("no");
   });
@@ -1041,6 +1044,28 @@ await withFakeRelay(relayFiles(mkManifest({ permissionChange: true })), async (u
     const r = await upgradeAgainst(u, { ...trust, CAN2CUP_RELEASE_BASE: rel }, "--dry-run");
     expect(r.status === 3 && r.out.includes(`changelog: ${rel}/v99.0.0/changelog.txt (sha256 matches`) && /98\.0\.0: !! DATA FLOW/.test(r.out), "a relay with /dl serving a changelog.txt edited to drop a `!!` line: its hash does not match, the release copy is used, and its flag stops the upgrade");
   }));
+  // Re-review of 2b03d9e. Prerelease: changelogFlags / cmpSemver see x.y.z only, so such a range is unverified.
+  expect(isPrereleaseRange("99.0.0-beta.1", "99.0.0") && isPrereleaseRange("98.0.0", "99.0.0-rc.1") && !isPrereleaseRange("98.0.0", "99.0.0") && !isPrereleaseRange(pkgVersion, "99.0.0"), "a range with a prerelease at either end is recognised as one (installed 1.2.3-beta.1 → 1.2.3 across a flagged rc)");
+  const preM = mkManifest({ version: "99.0.0-rc.1" });
+  await withFakeRelay({ ...relayFiles(preM), "/dl/VERSION": "99.0.0-rc.1\n" }, async (u) => { const r = await upgradeAgainst(u, trust, "--dry-run"); expect(r.status === 3 && /prerelease ranges are not checked line by line/.test(r.out) && /could not be verified against the signed manifest/.test(r.out) && !/would install/.test(r.out), "a prerelease target stops for --yes even with a matching changelog and no flags: prerelease ranges are not checked line by line"); });
+  // Size: a changelog source is read at most 2 MiB, by Content-Length and by bytes actually read; past it, that source is not obtained.
+  const bigCl = "## 99.0.0 — 2026-09-05\n" + "x".repeat(2 * 1024 * 1024) + "\n";
+  const bigM = mkManifest({ changelogSha256: shaOf(bigCl) });
+  for (const [how, chunked, why] of [["Content-Length", [] as string[], /Content-Length \d+ is over the 2 MiB cap/], ["streamed bytes", ["/changelog.txt"], /the body ran past the 2 MiB cap/]] as const) {
+    await withFakeRelay({}, (rel) => withFakeRelay({ ...relayFiles(bigM), "/changelog.txt": bigCl }, async (u) => {
+      const r = await upgradeAgainst(u, { ...trust, CAN2CUP_RELEASE_BASE: rel }, "--dry-run");
+      expect(r.status === 3 && why.test(r.out) && r.out.includes(`${rel}/v99.0.0/changelog.txt → HTTP 404`) && !/would install/.test(r.out), `a relay changelog over 2 MiB (${how}) is not read even though its hash would match — the release is tried next, and with nothing there the range is unverified`);
+    }, {}, [...chunked]));
+  }
+  await withFakeRelay({ "/v99.0.0/changelog.txt": clText }, (rel) => withFakeRelay({ ...relayFiles(), "/changelog.txt": bigCl }, async (u) => {
+    const r = await upgradeAgainst(u, { ...trust, CAN2CUP_RELEASE_BASE: rel }, "--dry-run");
+    expect(r.status === 0 && r.out.includes(`changelog: ${rel}/v99.0.0/changelog.txt (sha256 matches`) && /would install can2cup 99\.0\.0/.test(r.out), "a relay changelog over the cap falls through to the release copy, which is used");
+  }, {}, ["/changelog.txt"]));
+  // --force onto the installed version crosses no release: that version's own manifest flags do not stop it.
+  await withFakeRelay({ ...relayFiles(mkManifest({ version: pkgVersion, permissionChange: true, dataFlowChange: true })), "/dl/VERSION": `${pkgVersion}\n` }, async (u) => {
+    const r = await upgradeAgainst(u, trust, "--dry-run", "--force");
+    expect(r.status === 0 && r.out.includes(`would install can2cup ${pkgVersion}`) && !/declared in the signed manifest/.test(r.out), "upgrade --force to the version already installed is not stopped by that version's own manifest flags");
+  });
 }
 // the real dev relay: stage-tarball wrote a manifest; verify it is well-formed and names the served tarball (signing needs the maintainer key, not tested here)
 const devManifest = (await (await fetch(`${RELAY}/dl/manifest.json`)).json()) as { version: string; files: Record<string, string> };

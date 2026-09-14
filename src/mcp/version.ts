@@ -41,6 +41,13 @@ export function changelogFlags(changelog: string, from: string, to?: string | nu
   return out;
 }
 
+/** v0.18.0: whether either end of an upgrade range is a prerelease (1.2.3-rc.1). changelogFlags matches `## x.y.z`
+ *  headings and cmpSemver compares x.y.z only, so 1.2.3-beta.1 → 1.2.3 would skip a flagged 1.2.3-rc.1: such a range
+ *  cannot be checked line by line, and the caller treats it as unverified. */
+export function isPrereleaseRange(from: string | null | undefined, to: string | null | undefined): boolean {
+  return [from, to].some((v) => /^v?\d+\.\d+\.\d+-/.test((v ?? "").trim()));
+}
+
 /** One paragraph for the agent (watch output / MCP context). null when up to date or the relay never said. */
 export function upgradeNotice(relay: string, mine = CLIENT_VERSION, rv = relayVersions): string | null {
   const lvl = upgradeLevel(mine, rv);

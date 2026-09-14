@@ -49,40 +49,57 @@ heads.forEach((m, i) => {
 });
 
 /** The asset files for version v, verified — or undefined when <dl> is for another version. Exits on a bad signature. */
+// One snapshot: every file is read from <dl> exactly once, verified from those bytes, written to a temp directory,
+// and only the snapshot is uploaded — a file rewritten in <dl> between the check and the upload cannot slip past it.
+// Upload order is the returned order: changelog.txt and VERSION.sha256 first, manifest.sig and manifest.json last, so
+// a release never shows a new manifest next to the previous version's supporting files.
 async function releaseAssets(v) {
-  const file = (n) => join(DL, n);
-  if (!existsSync(file("manifest.json"))) return undefined;
-  const manifest = JSON.parse(readFileSync(file("manifest.json"), "utf8"));
+  const read = (n) => { try { return readFileSync(join(DL, n)); } catch { return null; } };
+  const manifestBytes = read("manifest.json");
+  if (!manifestBytes) return undefined;
+  let manifest;
+  try { manifest = JSON.parse(manifestBytes.toString("utf8")); } catch (e) { console.error(`${DL}/manifest.json is not JSON (${e.message}) — not attaching anything`); process.exit(1); }
   if (manifest.version !== v) return undefined;
-  for (const n of ["manifest.sig", "VERSION.sha256"]) if (!existsSync(file(n))) { console.error(`${DL} has manifest.json for ${v} but no ${n} — sign (release-sign.mjs) before creating the release`); process.exit(1); }
+  const sigBytes = read("manifest.sig");
+  const sumsBytes = read("VERSION.sha256");
+  for (const [n, b] of [["manifest.sig", sigBytes], ["VERSION.sha256", sumsBytes]]) if (!b) { console.error(`${DL} has manifest.json for ${v} but no ${n} — sign (release-sign.mjs) before creating the release`); process.exit(1); }
   const { verifyManifest, RELEASE_PUBS } = await import("../dist/protocol/index.js");
-  const verdict = verifyManifest(manifest, readFileSync(file("manifest.sig"), "utf8").trim(), RELEASE_PUBS);
+  const verdict = verifyManifest(manifest, sigBytes.toString("utf8").trim(), RELEASE_PUBS);
   if (!verdict.ok) { console.error(`${DL}/manifest.json for ${v}: ${verdict.reason} — not attaching it`); process.exit(1); }
-  for (const l of readFileSync(file("VERSION.sha256"), "utf8").split("\n").filter((x) => x.trim())) {
+  for (const l of sumsBytes.toString("utf8").split("\n").filter((x) => x.trim())) {
     const m = /^([0-9a-f]{64}) {2}(\S+)\r?$/.exec(l);
     if (!m || manifest.files[m[2]] !== m[1]) { console.error(`${DL}/VERSION.sha256 disagrees with the signed manifest (${l.slice(0, 90)}) — not attaching it`); process.exit(1); }
   }
   // `can2cup upgrade` reads the `!!` lines of every release in between only from a changelog whose sha256 is the
-  // manifest's changelogSha256. The working copy may have moved on since staging, so the copy at the tag is the other
-  // candidate; attaching one that does not match would only make every client stop for --yes.
-  const files = ["manifest.json", "manifest.sig", "VERSION.sha256"].map(file);
-  if (!manifest.changelogSha256) { console.error(`${DL}/manifest.json for ${v} carries no changelogSha256 — attaching it without changelog.txt`); return files; }
-  const candidates = [
-    ["relay-assets/changelog.txt", () => readFileSync(CHANGELOG_FILE)],
-    [`relay-assets/changelog.txt at tag v${v}`, () => execFileSync("git", ["show", `v${v}:relay-assets/changelog.txt`], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 << 20 })],
-  ];
-  for (const [label, read] of candidates) {
-    let bytes;
-    try { bytes = read(); } catch { continue; }
-    if (createHash("sha256").update(bytes).digest("hex") !== manifest.changelogSha256) continue;
-    const d = join(dir, `v${v}`);
-    mkdirSync(d, { recursive: true });
-    writeFileSync(join(d, "changelog.txt"), bytes);
-    console.log(`changelog.txt for ${v}: ${label} (sha256 matches the signed manifest)`);
-    return [...files, join(d, "changelog.txt")];
+  // manifest's changelogSha256 — checked here against the snapshot manifest's bytes. The working copy may have moved on
+  // since staging, so the copy at the tag is the other candidate; attaching one that does not match would only make
+  // every client stop for --yes.
+  let changelogBytes = null;
+  if (!manifest.changelogSha256) console.error(`${DL}/manifest.json for ${v} carries no changelogSha256 — attaching it without changelog.txt`);
+  else {
+    const candidates = [
+      ["relay-assets/changelog.txt", () => readFileSync(CHANGELOG_FILE)],
+      [`relay-assets/changelog.txt at tag v${v}`, () => execFileSync("git", ["show", `v${v}:relay-assets/changelog.txt`], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 << 20 })],
+    ];
+    for (const [label, readCandidate] of candidates) {
+      let bytes;
+      try { bytes = readCandidate(); } catch { continue; }
+      if (createHash("sha256").update(bytes).digest("hex") !== manifest.changelogSha256) continue;
+      changelogBytes = bytes;
+      console.log(`changelog.txt for ${v}: ${label} (sha256 matches the signed manifest)`);
+      break;
+    }
+    if (!changelogBytes) { console.error(`neither relay-assets/changelog.txt nor its copy at tag v${v} has the signed manifest's changelogSha256 (${String(manifest.changelogSha256).slice(0, 12)}…) — not attaching anything`); process.exit(1); }
   }
-  console.error(`neither relay-assets/changelog.txt nor its copy at tag v${v} has the signed manifest's changelogSha256 (${String(manifest.changelogSha256).slice(0, 12)}…) — not attaching anything`);
-  process.exit(1);
+  const snap = join(dir, `v${v}`);
+  mkdirSync(snap, { recursive: true });
+  const out = [];
+  for (const [n, b] of [["changelog.txt", changelogBytes], ["VERSION.sha256", sumsBytes], ["manifest.sig", sigBytes], ["manifest.json", manifestBytes]]) {
+    if (!b) continue;
+    writeFileSync(join(snap, n), b);
+    out.push(join(snap, n));
+  }
+  return out;
 }
 const CHANGELOG_FILE = fileURLToPath(new URL("../relay-assets/changelog.txt", import.meta.url));
 
@@ -108,6 +125,6 @@ for (const tag of wanted) {
   const flagged = firstLine.startsWith("!!");
   if (has) sh("gh", ["release", "edit", tag, "--title", title, "--notes-file", f]);
   else sh("gh", ["release", "create", tag, "--title", title, "--notes-file", f, "--verify-tag"]);
-  if (assets) sh("gh", ["release", "upload", tag, ...assets, "--clobber"]);
+  if (assets) for (const a of assets) sh("gh", ["release", "upload", tag, a, "--clobber"]); // one at a time, in the snapshot's order: manifest.json last
   console.log(`${has ? "updated" : "created"} ${tag}${flagged ? "  (!! flagged entry)" : ""}${assets ? `  + ${assets.map((a) => basename(a)).join(", ")}` : noAssets ? "" : `  (no assets: ${DL} is not for ${v})`}`);
 }
