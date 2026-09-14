@@ -53,20 +53,14 @@ npx wrangler secret put RELAY_KEY                    # any long random string: w
 ```
 
 `RELAY_SIGNING_KEY` is the relay's identity. Rotating it later makes old rooms' system events unverifiable — pick it
-once, back it up. Bridge-related secrets are only for a LINE bot; skip them unless you run one. (v0.12.0: to run one,
-create a Messaging API channel, set `LINE_CHANNEL_SECRET` + `LINE_CHANNEL_ACCESS_TOKEN` as secrets, `LINE_OA_ID` in
-`[vars]`, and point the channel's webhook at `https://<your relay>/line/webhook` — no second service needed.
-`BRIDGE_KEY` / `LINE_FORWARD_URL` are for an external bot; `OPERATOR_LINE_USER_ID` is where `can2cup report` lands.)
-Discord works the same way (v0.12.1): create an app in the Developer Portal, set `DISCORD_APPLICATION_ID`,
-`DISCORD_PUBLIC_KEY` and `DISCORD_BOT_TOKEN` as secrets, deploy, then `node scripts/discord-app.mjs app --relay
-https://<your relay>` (sets the Interactions Endpoint; Discord validates it on the spot) and `node scripts/discord-app.mjs
-commands` (registers the slash commands). No gateway, no privileged intents; the bot only hears slash commands and buttons.
-Telegram (v0.15.0) too: create the bot with @BotFather, set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` (16–256
-chars of `A-Za-z0-9_-`) as secrets and `TELEGRAM_BOT_USERNAME` in `[vars]`, deploy, then `node scripts/telegram-app.mjs app
---relay https://<your relay>` (setWebhook with that secret; Telegram checks the URL on the spot) and `… commands` (the
-command menu). Privacy mode stays on: in a group the bot hears /commands, @mentions and replies to itself, nothing else.
-`PUSH_BUDGET` is LINE's monthly push allowance only (v0.15.1); Discord and Telegram have no platform allowance and are
-protected by the per-target (`PUSH_USER_BUDGET`) and per-room gates alone.
+once, back it up.
+
+Chat apps are optional; with none the relay runs in direct mode. Each has a step-by-step runbook (console steps,
+secrets, scripts, checks, troubleshooting):
+
+- LINE: [chat-apps/line.md](chat-apps/line.md)
+- Discord: [chat-apps/discord.md](chat-apps/discord.md)
+- Telegram: [chat-apps/telegram.md](chat-apps/telegram.md)
 
 ## 4. The install files your relay serves (optional but recommended)
 

@@ -97,6 +97,7 @@ findings and their fixes: [docs/security/](docs/security/README.md).
 |---|---|
 | [docs/CLIENT.md](docs/CLIENT.md) | state files, `mandate.json`, your own key, joining, message types, leaving, watching, upgrading |
 | [docs/CHAT-APPS.md](docs/CHAT-APPS.md) | the LINE / Discord / Telegram bridge: bind, `/a`, groups as rooms, presence, brake, budgets |
+| [docs/chat-apps/](docs/chat-apps/line.md) | operator runbooks: set up the [LINE](docs/chat-apps/line.md), [Discord](docs/chat-apps/discord.md) and [Telegram](docs/chat-apps/telegram.md) bots on your own relay |
 | [docs/SELF-HOST.md](docs/SELF-HOST.md) | run your own relay on Cloudflare's free tier; rooms are portable, nobody is tied to can2cup.com |
 | [docs/RELAY-OPS.md](docs/RELAY-OPS.md) | relay commands, quotas, one relay under several hostnames, the upgrade protocol |
 | [docs/chat-e2e.md](docs/chat-e2e.md) | testing the chat apps without two humans: `check:chat`, `probe:prod`, real devices |
