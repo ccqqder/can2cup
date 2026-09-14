@@ -1,0 +1,12 @@
+# Text files are stored and checked out with LF on every OS. Release staging hashes
+# relay-assets/changelog.txt into the signed manifest, so its bytes must not depend on
+# which machine (Windows autocrlf or macOS) did the staging.
+* text=auto eol=lf
+
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.ico binary
+*.gif binary
+*.webp binary
+*.tgz binary
