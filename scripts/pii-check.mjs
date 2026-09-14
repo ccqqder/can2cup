@@ -63,7 +63,9 @@ function scan(file, n, text) {
   if (ALLOW.some((r) => r.test(text))) return;
   for (const [re, what] of patterns) {
     const m = re.exec(text);
-    if (m) hits.push(`${file}:${n}: ${what}: ${m[0].slice(0, 60)}`);
+    // Location and kind only. Echoing the match would copy it into terminal scrollback, CI logs and any
+    // agent's context, which is exactly where a personal pattern must never appear.
+    if (m) hits.push(`${file}:${n}: ${what}`);
   }
 }
 
