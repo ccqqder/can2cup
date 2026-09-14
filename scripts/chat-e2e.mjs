@@ -30,7 +30,9 @@ const RELAY = process.env.RELAY ?? "http://127.0.0.1:8787";
 const BRIDGE_KEY = process.env.BRIDGE_KEY ?? "devbridge";
 const LINE_SECRET = process.env.LINE_CHANNEL_SECRET ?? "devsecret";
 const TG_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET ?? "devtelegramsecret0000";
-const TG_BOT = process.env.TELEGRAM_BOT_USERNAME ?? "can2cup_bot";
+// The relay under test strips "@<its username>" from commands; take the name from the same .dev.vars wrangler dev reads.
+const devVar = (k) => { try { return new RegExp(`^${k}=(.*)$`, "m").exec(fs.readFileSync(".dev.vars", "utf8"))?.[1]?.trim(); } catch { return undefined; } };
+const TG_BOT = process.env.TELEGRAM_BOT_USERNAME ?? devVar("TELEGRAM_BOT_USERNAME") ?? "dev_can2cup_bot";
 const DISCORD_DEV_SEED = process.env.DISCORD_DEV_SEED ?? "a9d408978d850b8e4214c5eeb2aaef9a2870c311045322de55f272d6796f7cf3"; // throwaway; pub ce53d70c…40cb8
 const DISCORD_KEY = createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(DISCORD_DEV_SEED, "hex")]), format: "der", type: "pkcs8" });
 const argv = process.argv.slice(2);
@@ -110,7 +112,7 @@ function telegramDriver() {
   const gid = String(-1_000_000_000_000 - num());
   const G = `tg:c:${gid}`;
   let updateId = 900_000_000 + num() % 1_000_000;
-  const bot = { id: 8863296557, is_bot: true, first_name: "can2cup", username: TG_BOT };
+  const bot = { id: 123456789, is_bot: true, first_name: "can2cup", username: TG_BOT };
   const chatGroup = { id: Number(gid), type: "supergroup", title: "測試群" };
   async function post(update) {
     const r = await fetch(`${RELAY}/telegram/webhook`, { method: "POST", headers: { "content-type": "application/json", "x-telegram-bot-api-secret-token": TG_SECRET }, body: JSON.stringify({ update_id: updateId++, ...update }) });

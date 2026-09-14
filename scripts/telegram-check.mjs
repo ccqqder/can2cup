@@ -4,11 +4,14 @@
 // Needs a local relay with DEBUG_ROUTES=1 and the dev secret:
 //   RELAY=http://127.0.0.1:8787 BRIDGE_KEY=devbridge node scripts/telegram-check.mjs
 import { randomBytes } from "node:crypto";
+import fs from "node:fs";
 
 const RELAY = process.env.RELAY ?? "http://127.0.0.1:8787";
 const BRIDGE_KEY = process.env.BRIDGE_KEY ?? "devbridge";
 const SECRET = process.env.TELEGRAM_WEBHOOK_SECRET ?? "devtelegramsecret0000";
-const BOT_USER = process.env.TELEGRAM_BOT_USERNAME ?? "can2cup_bot";
+// The relay under test strips "@<its username>" from commands; take the name from the same .dev.vars wrangler dev reads.
+const devVar = (k) => { try { return new RegExp(`^${k}=(.*)$`, "m").exec(fs.readFileSync(".dev.vars", "utf8"))?.[1]?.trim(); } catch { return undefined; } };
+const BOT_USER = process.env.TELEGRAM_BOT_USERNAME ?? devVar("TELEGRAM_BOT_USERNAME") ?? "dev_can2cup_bot";
 const VERBOSE = !!process.env.VERBOSE;
 const num = () => Number.parseInt(randomBytes(4).toString("hex"), 16);
 const UID = process.env.USER_ID ?? String(1_000_000_000 + num() % 1_000_000_000);
@@ -24,7 +27,7 @@ async function post(body, { secret = SECRET, raw } = {}) {
   return { status: r.status, json: await r.json().catch(() => ({})) };
 }
 const from = { id: Number(UID), is_bot: false, first_name: "測試員", username: "tester", language_code: "zh-hant" };
-const bot = { id: 8863296557, is_bot: true, first_name: "can2cup", username: BOT_USER };
+const bot = { id: 123456789, is_bot: true, first_name: "can2cup", username: BOT_USER };
 const chatDm = { id: Number(UID), type: "private", first_name: "測試員", username: "tester" };
 const chatGroup = { id: Number(GID), type: "supergroup", title: "測試群" };
 /** A forged Update. `where`: "dm" | "group". */

@@ -97,7 +97,7 @@ export class TelegramChannel implements Channel {
   get enabled(): boolean { return !!this.env.TELEGRAM_BOT_TOKEN; }
   get configured(): boolean { return !!this.env.TELEGRAM_WEBHOOK_SECRET; }
   owns(id: string | undefined): boolean { return isTelegramId(id); }
-  /** The bot's own user id is the token's first half ("8863296557:…"); no API call needed to recognise itself. */
+  /** The bot's own user id is the token's first half ("123456789:…"); no API call needed to recognise itself. */
   private get botId(): string { return (this.env.TELEGRAM_BOT_TOKEN ?? "").split(":")[0]; }
   private get botUser(): string { return (this.env.TELEGRAM_BOT_USERNAME ?? "").replace(/^@/, ""); }
   /** Is this Telegram user the bot itself? By id (from the token) or by username (the var) — the latter is what a relay

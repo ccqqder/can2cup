@@ -12,7 +12,7 @@ RELAY_ALIASES=
 LINE_CHANNEL_SECRET=devsecret
 DISCORD_PUBLIC_KEY=ce53d70c9973b866965929632fc72f5da94eaaa53338cb637fc6253193240cb8
 TELEGRAM_WEBHOOK_SECRET=devtelegramsecret0000
-TELEGRAM_BOT_USERNAME=can2cup_bot
+TELEGRAM_BOT_USERNAME=dev_can2cup_bot
 
 # short timers so the smoke's presence / inbox / binding-lifetime sections finish in seconds
 PRESENCE_GRACE_SEC=2
