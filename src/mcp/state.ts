@@ -123,10 +123,12 @@ function writeJson(file: string, v: unknown): void {
 const holderAlive = (lock: string): boolean => {
   try { const pid = Number(fs.readFileSync(lock, "utf8").trim()); if (!pid) return false; process.kill(pid, 0); return true; } catch { return false; }
 };
-export function withLock<T>(name: string, fn: () => T, opts: { strict?: boolean } = {}): T {
+export function withLock<T>(name: string, fn: () => T, opts: { strict?: boolean; waitMs?: number } = {}): T {
   ensureHome();
   const lock = path.join(HOME, `${name}.lock`);
-  const deadline = Date.now() + 5000;
+  // The wait blocks the event loop (Atomics.wait): a caller for whom the write is optional passes a short waitMs.
+  const waitMs = opts.waitMs ?? 5000;
+  const deadline = Date.now() + waitMs;
   let owned = false;
   for (;;) {
     try { const fd = fs.openSync(lock, "wx"); fs.writeSync(fd, String(process.pid)); fs.closeSync(fd); owned = true; break; }
@@ -135,7 +137,7 @@ export function withLock<T>(name: string, fn: () => T, opts: { strict?: boolean 
       // "remove" it, and neither can remove the live lock the other created a moment later.
       try { if (Date.now() - fs.statSync(lock).mtimeMs > 10_000 && !holderAlive(lock)) { const dead = `${lock}.${process.pid}.stale`; fs.renameSync(lock, dead); try { fs.unlinkSync(dead); } catch { /* best effort */ } continue; } } catch { continue; }
       if (Date.now() > deadline) {
-        if (opts.strict) throw new Error(`could not take the ${name} lock within 5 s — another can2cup process on this computer holds it (${lock}). Not proceeding without it; try again in a moment.`);
+        if (opts.strict) throw new Error(`could not take the ${name} lock within ${Math.round(waitMs / 1000)} s — another can2cup process on this computer holds it (${lock}). Not proceeding without it; try again in a moment.`);
         break; // a room cursor may still be written; the other process's lock stays theirs
       }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
@@ -211,7 +213,7 @@ export function saveSeen(s: Seen): void {
 }
 /** Read-modify-write of the approval ledger under the cross-process lock; `fn` must not await.
  *  Strict: without the lock this throws rather than running — an approval is spent exactly once or not at all. */
-export function updateSeen<T>(fn: (s: Seen) => T): T { return withLock("seen", () => { const s = loadSeen(); const r = fn(s); saveSeen(s); return r; }, { strict: true }); }
+export function updateSeen<T>(fn: (s: Seen) => T, opts: { waitMs?: number } = {}): T { return withLock("seen", () => { const s = loadSeen(); const r = fn(s); saveSeen(s); return r; }, { strict: true, ...opts }); }
 
 export function loadRooms(): Record<string, LocalRoom> {
   return readJson<Record<string, LocalRoom>>("rooms.json", {});

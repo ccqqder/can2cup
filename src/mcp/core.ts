@@ -479,15 +479,21 @@ async function remotePaused(): Promise<string | null> {
     // Signed pause: the newest valid statement by the principal's key wins, and an unsigned
     // /resume can never lift it. An unsigned /pause still brakes (a brake that more parties can
     // pull is the safe failure direction).
+    let heard: { paused: boolean; at: string } | null = null;
     if (principal && st.signedPause) {
       const v = verifyPrincipal(st.signedPause, principal.pub, me.pub);
       if (v.ok) {
         const sp = st.signedPause;
-        updateSeen((cur) => { if (!cur.pause || Date.parse(sp.at) >= Date.parse(cur.pause.at)) cur.pause = sp; });
+        heard = { paused: !!sp.paused, at: sp.at };
+        // The ledger lock can be busy (another process spending an approval). Remembering the statement can wait for
+        // the next check, so do not block on it: a 5 s wait freezes the event loop, and a busy lock must not surface
+        // as "bridge unreachable". `heard` still counts below.
+        try { updateSeen((cur) => { if (!cur.pause || Date.parse(sp.at) >= Date.parse(cur.pause.at)) cur.pause = sp; }, { waitMs: 0 }); } catch { /* lock busy */ }
       }
     }
-    // What this machine remembers counts whether or not the relay repeated it this time.
-    const local = localSignedPause();
+    // What this machine remembers counts whether or not the relay repeated it this time; the newer statement wins.
+    const saved = localSignedPause();
+    const local = heard && (!saved || Date.parse(heard.at) >= Date.parse(saved.at)) ? heard : saved;
     if (local?.paused) { paused = true; why = `your principal paused this agent (signed, ${local.at}); \`can2cup resume --remote\` lifts it`; }
     pausedCache = { at: Date.now(), paused, why, bound: st.bound || !!st.principalPub };
     return paused ? why : null;
