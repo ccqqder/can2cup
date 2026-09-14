@@ -82,7 +82,7 @@ console.log(`sha256 ${sha}`);
 // An explicitly named changelog must exist: a missing one would silently clear both flags.
 if (argv.includes("--changelog") && !fs.existsSync(CHANGELOG)) { console.error(`--changelog ${CHANGELOG} not found`); process.exit(1); }
 const changelog = fs.existsSync(CHANGELOG) ? fs.readFileSync(CHANGELOG, "utf8") : "";
-const entry = (() => { const m = new RegExp(`^## ${pkg.version.replace(/\./g, "\\.")}\\b[^\\n]*\\n([\\s\\S]*?)(?=^## |\\Z)`, "m").exec(changelog); return m ? m[1] : ""; })();
+const entry = (() => { const m = new RegExp(`^## ${pkg.version.replace(/\./g, "\\.")}\\b[^\\n]*\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, "m").exec(changelog); return m ? m[1] : ""; })();
 const flags = entry.split(/\r?\n/).filter((l) => l.startsWith("!!"));
 const toml = fs.readFileSync(CONFIG, "utf8");
 const minClient = (/^MIN_CLIENT\s*=\s*"([^"]*)"/m.exec(toml) ?? [])[1] ?? "0.0.0";
