@@ -945,6 +945,8 @@ async function main(): Promise<void> {
       const testPacing = floorEnv !== "" && Number.isFinite(Number(floorEnv)) && Number(floorEnv) >= 0;
       const minInterval = testPacing ? Number(floorEnv) : 15;
       const asked = Number(flag("interval") ?? flag("timeout") ?? 30) || 30; // --timeout kept as a legacy alias; 30 s (was 25)
+      // setTimeout turns Infinity or anything past 2^31-1 ms into ~1 ms — a huge --interval would become a tight loop
+      if (!Number.isFinite(asked) || asked < 0 || asked > 86_400) { console.error(`watch: --interval ${flag("interval") ?? flag("timeout")} must be a number of seconds up to 86400`); process.exit(2); }
       const interval = Math.max(minInterval, asked);
       if (asked < minInterval) console.error(`watch: --interval ${asked} is below the minimum of ${minInterval} s — sweeping every ${interval} s instead`);
       const mh = flag("max-hours");
@@ -1034,8 +1036,10 @@ ${c.outText(ib)}${exec ? "" : NOT_ACKED_HINT}`);
             console.log(text);
             return;
           } catch (e) {
-            // 2026-09-14: only a relay that REFUSES the room counts toward muting it. A 5xx / 429 / network error says
-            // nothing about the room — during the write-cap outage 500s muted healthy rooms for the rest of the watch.
+            // 2026-09-14: a 5xx / 429 / network error says nothing about the room and never counts toward muting it —
+            // during the write-cap outage 500s muted healthy rooms for the rest of the watch. What counts: the relay
+            // refusing the room (401/403/404/410) and errors on this computer (the room's local state gone or
+            // unreadable), which repeat every sweep until someone acts.
             const t = watchTransient(e);
             if (t) { transient ??= t; console.error(`watch: room ${room} error (${t}, not counted toward muting): ${e instanceof Error ? e.message : e}`); continue; }
             if (e instanceof RelayError && ![401, 403, 404, 410].includes(e.status)) { console.error(`watch: room ${room} error (not counted toward muting): ${e.message}`); continue; }
