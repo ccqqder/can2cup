@@ -6,7 +6,7 @@
       "id": "KI-001",
       "title": "npm install fails with EEXIST (an old `parley` command is still installed)",
       "match": "EEXIST|parley already exists",
-      "fix": "npm rm -g parley  →  npm i -g https://can2cup.com/dl/can2cup.tgz   (can2cup is the same program under its new name; nothing is lost)"
+      "fix": "npm rm -g parley  →  npm i -g can2cup   (can2cup is the same program under its new name; nothing is lost)"
     },
     {
       "id": "KI-002",
