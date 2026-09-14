@@ -60,8 +60,9 @@ export function sourceOverrides(): string[] {
 }
 
 /** What the relay advertises as its latest client (x-can2cup-latest). A fresh CLI process has seen no reply yet, so
- *  one read-only signed call (/p/groups: no presence, no side effect) fetches the headers. Needs this machine's agent
- *  identity; without one (or with the relay silent) the answer is null. Never creates an identity. */
+ *  one signed call to /p/groups fetches the headers. It changes no presence, but like every /p/* call it registers
+ *  this client's version on the relay (ver:<pub>). Needs this machine's agent identity; without one (or with the relay
+ *  silent) the answer is null. Never creates an identity. */
 export async function advertisedLatest(relayUrl: string, ms = 8000): Promise<string | null> {
   const known = getRelayVersions().latest;
   if (isVersion(known)) return known;
@@ -86,6 +87,18 @@ export async function npmLatest(ms = 10000): Promise<string | null> {
     const v = ((await r.json()) as { "dist-tags"?: { latest?: string } })["dist-tags"]?.latest;
     return isVersion(v) ? v : null;
   } catch { return null; }
+}
+
+/** GET an absolute URL as raw bytes (a hash must see exactly what was served). `why` as in fetchText. */
+export async function fetchBytes(url: string, ms = 10000): Promise<{ bytes: Buffer | null; why: string }> {
+  try {
+    const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(ms) });
+    if (!r.ok) return { bytes: null, why: `HTTP ${r.status}` };
+    return { bytes: Buffer.from(await r.arrayBuffer()), why: "" };
+  } catch (e) {
+    const err = e as { cause?: { code?: string }; message?: string };
+    return { bytes: null, why: err.cause?.code ?? err.message ?? String(e) };
+  }
 }
 
 /** GET an absolute URL as text. `why` says what went wrong when there is no body (HTTP status or network error). */

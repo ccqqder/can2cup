@@ -8,15 +8,18 @@
 // Needs `gh` logged in. A tag whose version has no changelog heading of its own (built but never published alone,
 // folded into the next entry) gets a one-line body saying so.
 //
-// Release assets: when <dl>/manifest.json is for the tag's version, manifest.json, manifest.sig and VERSION.sha256 are
-// attached to the release (gh release upload --clobber) — that is what scripts/mirror-dl.mjs reads, so a fork or a
-// self-hosted relay can mirror a release without the key. They are checked first: the signature must verify against
-// RELEASE_PUBS (dist/, so build first) and VERSION.sha256 must agree with the manifest; otherwise nothing is attached
-// and the script exits 1. A tag whose version is not the one in <dl> gets notes only.
+// Release assets: when <dl>/manifest.json is for the tag's version, manifest.json, manifest.sig, VERSION.sha256 and
+// changelog.txt are attached to the release (gh release upload --clobber) — that is what scripts/mirror-dl.mjs reads,
+// so a fork or a self-hosted relay can mirror a release without the key, and what `can2cup upgrade` reads when a relay
+// does not mirror /dl. They are checked first: the signature must verify against RELEASE_PUBS (dist/, so build first),
+// VERSION.sha256 must agree with the manifest, and changelog.txt must have the manifest's changelogSha256 (the working
+// copy, else the copy at the tag); otherwise nothing is attached and the script exits 1. A tag whose version is not
+// the one in <dl> gets notes only.
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
@@ -59,8 +62,29 @@ async function releaseAssets(v) {
     const m = /^([0-9a-f]{64}) {2}(\S+)\r?$/.exec(l);
     if (!m || manifest.files[m[2]] !== m[1]) { console.error(`${DL}/VERSION.sha256 disagrees with the signed manifest (${l.slice(0, 90)}) — not attaching it`); process.exit(1); }
   }
-  return ["manifest.json", "manifest.sig", "VERSION.sha256"].map(file);
+  // `can2cup upgrade` reads the `!!` lines of every release in between only from a changelog whose sha256 is the
+  // manifest's changelogSha256. The working copy may have moved on since staging, so the copy at the tag is the other
+  // candidate; attaching one that does not match would only make every client stop for --yes.
+  const files = ["manifest.json", "manifest.sig", "VERSION.sha256"].map(file);
+  if (!manifest.changelogSha256) { console.error(`${DL}/manifest.json for ${v} carries no changelogSha256 — attaching it without changelog.txt`); return files; }
+  const candidates = [
+    ["relay-assets/changelog.txt", () => readFileSync(CHANGELOG_FILE)],
+    [`relay-assets/changelog.txt at tag v${v}`, () => execFileSync("git", ["show", `v${v}:relay-assets/changelog.txt`], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 << 20 })],
+  ];
+  for (const [label, read] of candidates) {
+    let bytes;
+    try { bytes = read(); } catch { continue; }
+    if (createHash("sha256").update(bytes).digest("hex") !== manifest.changelogSha256) continue;
+    const d = join(dir, `v${v}`);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "changelog.txt"), bytes);
+    console.log(`changelog.txt for ${v}: ${label} (sha256 matches the signed manifest)`);
+    return [...files, join(d, "changelog.txt")];
+  }
+  console.error(`neither relay-assets/changelog.txt nor its copy at tag v${v} has the signed manifest's changelogSha256 (${String(manifest.changelogSha256).slice(0, 12)}…) — not attaching anything`);
+  process.exit(1);
 }
+const CHANGELOG_FILE = fileURLToPath(new URL("../relay-assets/changelog.txt", import.meta.url));
 
 const existing = new Set(sh("gh", ["release", "list", "--limit", "200", "--json", "tagName", "-q", ".[].tagName"]).split("\n").filter(Boolean));
 const wanted = all ? sh("git", ["tag", "--list", "v*", "--sort=creatordate"]).split("\n").filter(Boolean) : tags;
@@ -85,5 +109,5 @@ for (const tag of wanted) {
   if (has) sh("gh", ["release", "edit", tag, "--title", title, "--notes-file", f]);
   else sh("gh", ["release", "create", tag, "--title", title, "--notes-file", f, "--verify-tag"]);
   if (assets) sh("gh", ["release", "upload", tag, ...assets, "--clobber"]);
-  console.log(`${has ? "updated" : "created"} ${tag}${flagged ? "  (!! flagged entry)" : ""}${assets ? "  + manifest.json, manifest.sig, VERSION.sha256" : noAssets ? "" : `  (no assets: ${DL} is not for ${v})`}`);
+  console.log(`${has ? "updated" : "created"} ${tag}${flagged ? "  (!! flagged entry)" : ""}${assets ? `  + ${assets.map((a) => basename(a)).join(", ")}` : noAssets ? "" : `  (no assets: ${DL} is not for ${v})`}`);
 }

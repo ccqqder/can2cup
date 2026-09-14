@@ -233,9 +233,12 @@ Where the signed manifest comes from:
   `https://github.com/<owner>/<repo>/releases/download/v<version>/`, with owner/repo from `package.json`'s
   `repository` field. The checks are the same: the signature against the compiled-in release keys, the manifest
   naming that exact version, the npm tarball matching the manifest's hash, and `permissionChange` /
-  `dataFlowChange` stopping for `--yes` (plus the relay's `changelog.txt` lines when it serves one).
+  `dataFlowChange` stopping for `--yes`.
 
-The command prints which source the manifest came from. If neither yields a manifest that verifies, nothing is
+The `!!` lines of every release between the installed and the target version count only from a changelog whose sha256
+is the manifest's `changelogSha256` (the relay's `/changelog.txt`, else the release asset `changelog.txt`); when
+neither matches, the range is unverified and the command stops (exit 3) until `--yes`. The command prints which
+source the manifest came from. If neither yields a manifest that verifies, nothing is
 installed (`--allow-unsigned` still means "no signature, sha256 only"). `--from-relay` takes everything from the relay
 and never falls back, so on a relay without `/dl` it refuses. `CAN2CUP_RELEASE_BASE` (replaces
 `https://github.com/<owner>/<repo>/releases/download`) and `CAN2CUP_NPM_REGISTRY` exist for tests only; `can2cup doctor`

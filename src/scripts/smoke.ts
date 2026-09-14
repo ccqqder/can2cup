@@ -961,9 +961,13 @@ const winExit = (out: string): number => /change who may do what, or where data 
 const relKey = newKeypair();
 const tgzBody = "good tarball bytes";
 const tgzSha = createHash("sha256").update(tgzBody).digest("hex");
-const mkManifest = (o: Record<string, unknown> = {}) => ({ v: 1, version: "99.0.0", date: "2026-09-05", files: { "can2cup.tgz": tgzSha }, changelogSha256: "", permissionChange: false, dataFlowChange: false, minClient: "0.0.0", ...o });
+// v0.18.0: the changelog the fake relays serve is the one the manifest's changelogSha256 names — an upgrade reads `!!`
+// lines only from a changelog the signed manifest vouches for, and stops for --yes when it cannot find one.
+const shaOf = (s: string) => createHash("sha256").update(s).digest("hex");
+const clText = "## 99.0.0 — 2026-09-05\n- the smoke release\n";
+const mkManifest = (o: Record<string, unknown> = {}) => ({ v: 1, version: "99.0.0", date: "2026-09-05", files: { "can2cup.tgz": tgzSha }, changelogSha256: shaOf(clText), permissionChange: false, dataFlowChange: false, minClient: "0.0.0", ...o });
 const signedBy = (m: unknown, key = relKey) => signHex(canon(m), key.priv);
-const relayFiles = (m: Record<string, unknown> = mkManifest(), sig = signedBy(m), body = tgzBody): FakeFiles => ({ "/dl/VERSION": "99.0.0\n", "/dl/VERSION.sha256": `${tgzSha}  can2cup.tgz\n`, "/dl/can2cup.tgz": body, "/changelog.txt": "", "/dl/manifest.json": JSON.stringify(m), "/dl/manifest.sig": sig + "\n" });
+const relayFiles = (m: Record<string, unknown> = mkManifest(), sig = signedBy(m), body = tgzBody): FakeFiles => ({ "/dl/VERSION": "99.0.0\n", "/dl/VERSION.sha256": `${tgzSha}  can2cup.tgz\n`, "/dl/can2cup.tgz": body, "/changelog.txt": clText, "/dl/manifest.json": JSON.stringify(m), "/dl/manifest.sig": sig + "\n" });
 const trust = { CAN2CUP_RELEASE_PUBS: relKey.pub };
 await withFakeRelay(relayFiles(), async (u) => { const r = await upgradeAgainst(u, trust, "--dry-run"); expect(r.status === 0 && /would install can2cup 99.0.0/.test(r.out) && r.out.includes(relKey.pub.slice(0, 8)), "a manifest signed by a trusted release key, listing the served tarball: the upgrade would proceed (dry run)"); });
 await withFakeRelay(relayFiles(), async (u) => { const r = await upgradeAgainst(u, {}, "--dry-run"); expect(r.status === 2 && /not trusted|does not verify/.test(r.out), "…signed by a key this client does not trust: refused, nothing installed"); });
@@ -996,7 +1000,7 @@ await withFakeRelay(relayFiles(mkManifest({ permissionChange: true })), async (u
     let out = ""; child.stdout.on("data", (d: Buffer) => { out += d.toString(); }); child.stderr.on("data", (d: Buffer) => { out += d.toString(); });
     child.on("close", (status: number | null) => resolve({ status: process.platform === "win32" && status === 3221226505 ? winExit(out) : status, out }));
   });
-  const releaseFiles = (m: Record<string, unknown> = mkManifest(), sig = signedBy(m)): FakeFiles => ({ "/v99.0.0/manifest.json": JSON.stringify(m), "/v99.0.0/manifest.sig": sig + "\n", "/v99.0.0/VERSION.sha256": `${tgzSha}  can2cup.tgz\n` });
+  const releaseFiles = (m: Record<string, unknown> = mkManifest(), sig = signedBy(m), cl = clText): FakeFiles => ({ "/v99.0.0/manifest.json": JSON.stringify(m), "/v99.0.0/manifest.sig": sig + "\n", "/v99.0.0/VERSION.sha256": `${tgzSha}  can2cup.tgz\n`, "/v99.0.0/changelog.txt": cl });
   const npmFiles = (npm: string, body: string): FakeFiles => ({ "/can2cup": JSON.stringify({ name: "can2cup", "dist-tags": { latest: "99.0.0" } }), "/can2cup/99.0.0": JSON.stringify({ name: "can2cup", version: "99.0.0", dist: { tarball: `${npm}/can2cup/-/can2cup-99.0.0.tgz` } }), "/can2cup/-/can2cup-99.0.0.tgz": body });
   const viaRelease = async (o: { release?: FakeFiles; npmBody?: string; header?: boolean }, ...args: string[]) => {
     let r: { status: number | null; out: string } = { status: null, out: "" };
@@ -1021,6 +1025,22 @@ await withFakeRelay(relayFiles(mkManifest({ permissionChange: true })), async (u
   expect(flagged.status === 3 && /DATA FLOW \(declared in the signed manifest\)/.test(flagged.out), "a release manifest flagged dataFlowChange stops for --yes even though the relay serves no changelog");
   const fromRelay = await viaRelease({}, "--dry-run", "--from-relay");
   expect(fromRelay.status === 2 && /no signed release manifest/.test(fromRelay.out) && /does not mirror \/dl/.test(fromRelay.out) && !/GitHub Release v99/.test(fromRelay.out), "--from-relay on a relay without /dl refuses and does not fall back to the release");
+  // Security review of the fallback: an intermediate release's `!!` line must stop the upgrade even when the target's
+  // own manifest flags are false — read from a changelog whose sha256 the signed manifest names, never from trust.
+  const midCl = "## 99.0.0 — 2026-09-05\n- the target, no flags of its own\n\n## 98.0.0 — 2026-09-01\n!! DATA FLOW: smoke intermediate release\n- in between\n";
+  const midM = mkManifest({ changelogSha256: shaOf(midCl) });
+  const midNo = await viaRelease({ release: releaseFiles(midM, undefined, midCl) }, "--dry-run");
+  expect(midNo.status === 3 && /98\.0\.0: !! DATA FLOW: smoke intermediate release/.test(midNo.out) && /changelog: .*\/v99\.0\.0\/changelog\.txt \(sha256 matches/.test(midNo.out) && !/would install/.test(midNo.out), "no /dl, no relay changelog: the release's changelog (hash in the signed manifest) shows an intermediate DATA FLOW release — stops without --yes although the target's flags are false");
+  const midYes = await viaRelease({ release: releaseFiles(midM, undefined, midCl) }, "--dry-run", "--yes");
+  expect(midYes.status === 0 && /would install can2cup 99\.0\.0/.test(midYes.out), "…and proceeds with --yes");
+  const clBad = await viaRelease({ release: releaseFiles(mkManifest(), undefined, clText + "- edited after signing\n") }, "--dry-run");
+  expect(clBad.status === 3 && /could not be verified against the signed manifest/.test(clBad.out) && /is not the manifest's/.test(clBad.out) && !/would install/.test(clBad.out), "a release changelog whose sha256 is not the manifest's: the range is unverified — stops without --yes (fail closed)");
+  const clBadYes = await viaRelease({ release: releaseFiles(mkManifest(), undefined, clText + "- edited after signing\n") }, "--dry-run", "--yes");
+  expect(clBadYes.status === 0 && /note: --yes — The changes between/.test(clBadYes.out) && /would install can2cup 99\.0\.0/.test(clBadYes.out), "…and with --yes proceeds, saying the range was not verified");
+  await withFakeRelay({ "/v99.0.0/changelog.txt": midCl }, (rel) => withFakeRelay({ ...relayFiles(midM), "/changelog.txt": "## 99.0.0 — 2026-09-05\n- nothing to see here\n" }, async (u) => {
+    const r = await upgradeAgainst(u, { ...trust, CAN2CUP_RELEASE_BASE: rel }, "--dry-run");
+    expect(r.status === 3 && r.out.includes(`changelog: ${rel}/v99.0.0/changelog.txt (sha256 matches`) && /98\.0\.0: !! DATA FLOW/.test(r.out), "a relay with /dl serving a changelog.txt edited to drop a `!!` line: its hash does not match, the release copy is used, and its flag stops the upgrade");
+  }));
 }
 // the real dev relay: stage-tarball wrote a manifest; verify it is well-formed and names the served tarball (signing needs the maintainer key, not tested here)
 const devManifest = (await (await fetch(`${RELAY}/dl/manifest.json`)).json()) as { version: string; files: Record<string, string> };

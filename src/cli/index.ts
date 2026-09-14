@@ -49,7 +49,7 @@ import { HOME, DEFAULT_RELAY, RELAY_KEY, type LocalRoom, loadIdentity, loadRooms
 import { relay, bridge, principalApi, dashboardLines, RelayError, takePollHint } from "../mcp/relay-client.js";
 import { changelogFlags } from "../mcp/version.js";
 import { RELEASE_PUBS, RELEASE_TARBALL, verifyManifest, type ReleaseManifest } from "../protocol/release.js";
-import { PACKAGE_NAME, advertisedLatest, fetchText, isVersion, npmLatest, npmRegistry, releaseBase, releasePage, sourceOverrides } from "./upgrade-source.js";
+import { PACKAGE_NAME, advertisedLatest, fetchBytes, fetchText, isVersion, npmLatest, npmRegistry, releaseBase, releasePage, sourceOverrides } from "./upgrade-source.js";
 /** v0.10.0: the release keys this client trusts. CAN2CUP_RELEASE_PUBS (comma-separated) overrides — dev and smoke only;
  *  a real install trusts what was compiled in, which is the whole point. */
 function trustedReleasePubs(): string[] {
@@ -556,17 +556,46 @@ async function main(): Promise<void> {
       // v0.9.11: a release that changes who may do what, or where data goes, says so on a `!!` line. Those lines
       // go in front of the principal BEFORE the install — the agent shows them and comes back with --yes.
       // v0.10.0: the signed manifest carries the same two flags, so a silent changelog cannot hide one.
-      // v0.18.0: a relay without a changelog leaves the manifest flags to decide alone.
+      // v0.18.0 (security review of the release fallback): the `!!` lines of EVERY release between this version and the
+      // target decide, not only the target manifest's own two flags — and those lines count only from a changelog the
+      // signed manifest vouches for (changelogSha256: the sha256 of the whole file). Otherwise a relay that omits or
+      // edits changelog.txt hides an intermediate DATA FLOW release. The relay's copy first, then the release asset;
+      // when neither matches, the range is unverified, and that stops for --yes exactly like a flag does.
       let flags: string[] = [];
-      const changelog = await getText("/changelog.txt");
-      if (changelog) flags = changelogFlags(changelog, VERSION, latest || null);
+      let changelogFrom = "";
+      let rangeUnverified = "";
+      if (manifest) {
+        const want = typeof manifest.changelogSha256 === "string" && /^[0-9a-f]{64}$/.test(manifest.changelogSha256) ? manifest.changelogSha256 : "";
+        const clBase = releaseBase(manifest.version);
+        const tried: string[] = [];
+        if (!want) rangeUnverified = "the signed manifest carries no changelogSha256";
+        else for (const u of [`${DEFAULT_RELAY}/changelog.txt`, ...(clBase ? [`${clBase}/changelog.txt`] : [])]) {
+          const r = await fetchBytes(u, 10000);
+          if (!r.bytes) { tried.push(`${u} → ${r.why}`); continue; }
+          const got = createHash("sha256").update(r.bytes).digest("hex");
+          if (got !== want) { tried.push(`${u} → sha256 ${got.slice(0, 12)}… is not the manifest's ${want.slice(0, 12)}…`); continue; }
+          flags = changelogFlags(r.bytes.toString("utf8"), VERSION, manifest.version);
+          changelogFrom = u;
+          break;
+        }
+        if (want && !changelogFrom) rangeUnverified = tried.join("; ");
+        if (changelogFrom) console.error(`changelog: ${changelogFrom} (sha256 matches the signed manifest)`);
+      } else {
+        // --allow-unsigned: there is no manifest to check a changelog against — the relay's copy, unverified, as before.
+        const t = await getText("/changelog.txt");
+        if (t) { flags = changelogFlags(t, VERSION, latest || null); changelogFrom = `${DEFAULT_RELAY}/changelog.txt`; }
+      }
       if (manifest?.permissionChange && !flags.some((f) => /PERMISSION CHANGE/.test(f))) flags.push(`${manifest.version}: !! PERMISSION CHANGE (declared in the signed manifest)`);
       if (manifest?.dataFlowChange && !flags.some((f) => /DATA FLOW/.test(f))) flags.push(`${manifest.version}: !! DATA FLOW (declared in the signed manifest)`);
-      if (flags.length && !has("yes")) {
-        const fullText = changelog ? `${DEFAULT_RELAY}/changelog.txt` : (source === "release" && releasePage(latest)) || manifestFrom;
-        console.error(`Between can2cup ${VERSION} and ${latest || "the version the relay serves"}, these releases change who may do what, or where data goes:\n${flags.map((f) => "  " + f).join("\n")}\nShow these lines to your principal (full text: ${fullText}). Run  can2cup upgrade --yes  once they have seen them. Nothing was installed.`);
+      const target = manifest?.version || latest || "the version the relay serves";
+      const readAt = (manifest && releasePage(manifest.version)) || changelogFrom || manifestFrom || `${DEFAULT_RELAY}/changelog.txt`;
+      const unverifiedLine = rangeUnverified ? `The changes between can2cup ${VERSION} and ${target} could not be verified against the signed manifest (${rangeUnverified}): a release in between may change who may do what, or where data goes, without this command seeing its !! line. Read them at ${readAt}.` : "";
+      if ((flags.length || rangeUnverified) && !has("yes")) {
+        const listed = flags.length ? `Between can2cup ${VERSION} and ${target}, these releases change who may do what, or where data goes:\n${flags.map((f) => "  " + f).join("\n")}\n` : "";
+        console.error(`${listed}${unverifiedLine ? unverifiedLine + "\n" : ""}Show ${flags.length ? `these lines to your principal (full text: ${changelogFrom || readAt})` : "them to your principal"}. Run  can2cup upgrade --yes  once they have seen them. Nothing was installed.`);
         process.exit(3);
       }
+      if (rangeUnverified) console.error(`note: --yes — ${unverifiedLine}`);
       // v0.9.11 (security G-3, P1): download, check the sha256 the relay advertises, THEN hand the file to npm.
       // Same origin as the tarball, so this does not defeat a hostile relay; it catches a swapped or corrupted
       // file, and gives a person a number to compare out of band. --require-checksum refuses a relay without one.

@@ -65,8 +65,8 @@ secrets, scripts, checks, troubleshooting):
 
 ## 4. The install files your relay serves (optional but recommended)
 
-Clients upgrade by reading `/dl/VERSION`, `/dl/manifest.json` and `/dl/manifest.sig` **from their own relay**. Mirror
-the maintainer's signed files so your users get the same verified upgrades:
+Clients upgrade by reading `/dl/VERSION`, `/dl/manifest.json` and `/dl/manifest.sig` **from their own relay** first.
+Mirror the maintainer's signed files so your users get the same verified upgrades without depending on GitHub:
 
 ```bash
 for f in VERSION VERSION.sha256 manifest.json manifest.sig can2cup.tgz can2can.tgz parley.tgz; do
@@ -76,8 +76,10 @@ sha256sum -c relay-assets/dl/VERSION.sha256        # the tarball you mirrored is
 ```
 
 The manifest is signed by the maintainer's offline key, and the client trusts that key, not your relay — so mirroring
-is safe and your relay cannot alter what gets installed. If you skip this, clients still run; `can2cup upgrade` on
-them will refuse (no signed manifest) until they point at can2cup.com or you mirror the files.
+is safe and your relay cannot alter what gets installed. If you skip this, clients still run, and `can2cup upgrade`
+takes the same signed manifest (and changelog.txt) from the GitHub Release of the version your relay advertises, with
+the same checks ([CLIENT.md](CLIENT.md#upgrading)); `--from-relay` then refuses, since there is nothing to take from
+your relay.
 
 ## 5. Deploy and check
 

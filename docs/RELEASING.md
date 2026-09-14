@@ -28,7 +28,9 @@ npm run release:relay:local  # emergency variant: stage the locally packed tarba
 
 # 4. a GitHub Release for the tag, with the changelog entry as its body and the signed metadata attached:
 node scripts/gh-release.mjs v<version>     # extracts the entry from changelog.txt, runs `gh release create`, uploads
-                                           # dl/manifest.json, manifest.sig, VERSION.sha256 (verified first; --no-assets skips)
+                                           # dl/manifest.json, manifest.sig, VERSION.sha256 and changelog.txt
+                                           # (verified first: changelog.txt must carry the manifest's changelogSha256,
+                                           # from the working copy or the tag; --no-assets skips)
 ```
 
 `can2cup upgrade` on every client then downloads from npm (or `--from-relay`) and installs only if the tarball's hash
