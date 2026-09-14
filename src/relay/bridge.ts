@@ -177,10 +177,13 @@ const PRESENCE_STALE_MS = 3 * 60 * 1000; // no /p/* call (heartbeat is every 120
 // server's cost is bounded however badly a client behaves. The in-memory state below is only a supplement: DO instances
 // are evicted after ~70-140 s idle and on every deploy, so each decision to SKIP a write must be safe with empty maps.
 /** seen:<pub> is persisted at most this often while an agent stays online (presence also reads the in-memory lastCall).
- *  INVARIANT: SEEN_PERSIST_MS + the MCP heartbeat (120 s, src/mcp/index.ts) + jitter must stay < PRESENCE_STALE_MS
- *  (180 s). After an eviction only the stored seen: is left, and it may lag the real last call by up to this interval —
- *  if lag + the next heartbeat's gap could reach the stale limit, a live agent would be announced "offline". */
+ *  After an eviction only the stored seen: is left, and it may lag the real last call — if lag + the next heartbeat's
+ *  gap reaches the stale limit, a live agent is announced "offline". So a heartbeat (/p/heartbeat, /p/online) persists
+ *  seen: once BEAT_PERSIST_MS have passed, whatever SEEN_PERSIST_MS says.
+ *  INVARIANT: BEAT_PERSIST_MS + the MCP heartbeat (120 s, src/mcp/index.ts) + jitter must stay < PRESENCE_STALE_MS
+ *  (180 s): 30 + 120 leaves 30 s. (Review 2026-09-14: 45 s on every call left ~15 s after an eviction.) */
 const SEEN_PERSIST_MS = 45_000;
+const BEAT_PERSIST_MS = 30_000;
 const UNBOUND_SEEN_PERSIST_MS = 3_600_000; // keys with no binding and no hosted: key — nobody is told about their presence
 const META_PERSIST_MS = 600_000;           // ver:/host: rewrite at most this often per key (two processes on one key may disagree)
 // per pub, in memory: 60 back-to-back reads, then one per 2 s. Generous on purpose: send, wait and the commit gate all
@@ -974,7 +977,8 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     BridgeDO.remember(this.lastCall, pub, nowMs);
     const storedSeen = await this.get<string>(`seen:${pub}`);
     const age = nowMs - (storedSeen ? Date.parse(storedSeen) || 0 : 0);
-    let persistSeen = transition || age >= this.seenPersistMs(pub);
+    const beat = path === "/p/heartbeat" || path === "/p/online"; // see BEAT_PERSIST_MS: the stale clock after an eviction
+    let persistSeen = transition || age >= this.seenPersistMs(pub) || (beat && age >= Math.min(BEAT_PERSIST_MS, this.seenPersistMs(pub)));
     if (persistSeen && !transition && age < Math.max(UNBOUND_SEEN_PERSIST_MS, this.seenPersistMs(pub))
         && !(await this.bindingByPub(pub)) && !(await this.get(`hosted:${pub}`))) persistSeen = false; // nobody is told about an unbound key's presence
     if (persistSeen) await this.bookkeep(() => this.put(`seen:${pub}`, new Date(nowMs).toISOString()));
