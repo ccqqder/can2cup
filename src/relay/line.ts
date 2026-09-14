@@ -171,17 +171,19 @@ export class LineChannel implements Channel {
     }
     return this.menuIds.ids[prefix];
   }
-  /** Link the user's menu. A stale cached id (menus were redeployed) makes LINE answer 404 → refresh once and retry. */
+  /** Link the user's menu. A stale cached id (menus were redeployed) makes LINE answer 404 → refresh once and retry.
+   *  2026-09-14: what is remembered is the menu id, not only which of the two: after the operator reinstalls the menus
+   *  (new ids, old ones deleted) a bound person was never relinked and fell back to the default onboard menu. */
   async setMenu(userId: string, which: "console" | "onboard"): Promise<void> {
     if (!this.enabled) return;
     const cur = await this.store?.get<string>(`line:menu:${userId}`);
-    if (cur === which) return;
     for (let attempt = 0; attempt < 2; attempt++) {
       const id = await this.menuId(which);
       if (!id) return;
+      if (cur === `${which}:${id}`) return;
       try {
         const r = await this.api(`/user/${userId}/richmenu/${id}`, {});
-        if (r.ok) { await this.store?.put(`line:menu:${userId}`, which); return; }
+        if (r.ok) { await this.store?.put(`line:menu:${userId}`, `${which}:${id}`); return; }
         if (r.status === 404 && attempt === 0) { this.menuIds = null; continue; }
         return;
       } catch { return; }

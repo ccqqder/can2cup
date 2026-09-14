@@ -211,7 +211,7 @@ links each person to one of them when they follow the account and on their 1:1 m
 | Replies work, pushes do not | replies are free and pushes are metered; see the row above, or the person blocked the account | as above |
 | Everyone sees console buttons that do nothing | menus installed in the wrong order, or the console menu is the default | rerun `line-app.mjs menus --dir …`; `show` must mark onboard as default |
 | No menu at all | no menu name starts with the prefixes, or `LINE_MENU_*` in `wrangler.toml` still name someone else's menus | fix the names or delete the vars (B2), redeploy, rerun `menus` |
-| After reinstalling menus, a bound person sees the onboard menu | their per-user link pointed at a deleted menu; the relay remembers it already linked them and relinks only when their bound state changes | link them to the new console menu through the Messaging API, or have them `/unbind` and bind again |
+| After reinstalling menus, a bound person sees the onboard menu for a while | their per-user link pointed at a deleted menu; the relay rereads the menu list at most once an hour and relinks each person on their next 1:1 message after that | wait up to an hour and send the bot any message; relays older than 0.18.0 relinked only when the bound state changed (`/unbind` and bind again) |
 | `line-app.mjs`: `.env.line not found` | `CAN2CUP_ENV_DIR` unset or wrong | set it, or `LINE_ENV_FILE=<path>` |
 | Deep links open the wrong account | `LINE_OA_ID` still the maintainer's | B2 |
 
