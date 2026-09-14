@@ -35,7 +35,7 @@
  *   Agent-facing (same logic as the MCP tools — for an agent whose MCP host has not restarted yet):
  *   can2cup join "<invite>" · wait <room> [--timeout N] · send <room> <type> "<text>" [--amount N …] ·
  *   history <room> · close <room> "<summary>" · create [--name N] · link · tell "<text>" [--where dm|group|group:g2] [--image FILE [--ttl SEC]]
- *   watch [room…] [--interval 25] [--exec CMD]  zero-token duty: sweep until real content, print it, exit 0
+ *   watch [room…] [--interval 30] [--exec CMD] [--max-hours 12]  zero-token duty: sweep until real content, print it, exit 0
  *   groups                                       LINE groups the principal has spoken from (aliases for --where)
  */
 import { spawnSync, spawn } from "node:child_process";
@@ -46,7 +46,7 @@ import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
 import { encodeInvite, encodeInviteUrl, genesis, lineDeepLink, pubFromPriv, short, signPrincipal, signSealedBid, type RoomExport, type SignedPrincipalMsg, chatAppLabel } from "../protocol/index.js";
 import { HOME, DEFAULT_RELAY, RELAY_KEY, type LocalRoom, loadIdentity, loadRooms, saveRoom, loadMandate, isPaused, loadPrincipal, createPrincipal, loadInboxCursor, saveInstalled, loadUpgradeNag, loadSoul, soulFile, saveMechLocal } from "../mcp/state.js";
-import { relay, bridge, principalApi, dashboardLines } from "../mcp/relay-client.js";
+import { relay, bridge, principalApi, dashboardLines, RelayError, takePollHint } from "../mcp/relay-client.js";
 import { changelogFlags } from "../mcp/version.js";
 import { RELEASE_PUBS, RELEASE_TARBALL, verifyManifest, type ReleaseManifest } from "../protocol/release.js";
 /** v0.10.0: the release keys this client trusts. CAN2CUP_RELEASE_PUBS (comma-separated) overrides — dev and smoke only;
@@ -194,7 +194,7 @@ function usage(): void {
   can2cup groups                            groups your principal has spoken from (LINE / Discord / Telegram; aliases for --where group:<alias>)
   can2cup wire <room> <group>               attach a room you opened by hand to a group the principal spoke from
   can2cup note <room> "<text>"              a private note in the local audit log (never leaves this machine)
-  can2cup watch [--interval S] [--exec]     duty: sweep the inbox and open rooms in a background shell; one per computer
+  can2cup watch [--interval S] [--exec] [--max-hours H]   duty: sweep the inbox and open rooms in a background shell; one per computer
   can2cup ack [seq]                         acknowledge principal inbox items you handled without --exec
   can2cup version                           print this client's version (the relay learns it from every call)
   can2cup status                            onboarding checklist — what is done, what is next
@@ -209,13 +209,17 @@ function usage(): void {
       --image hosts the file on the relay for --ttl seconds (default 3600 — LINE phones fetch the URL when
       each viewer first opens the chat, so very short TTLs break the image for late viewers) and sends it.
   can2cup groups                  known groups + their aliases (g1, g2, …)
-  can2cup watch [room…] [--interval 25] [--exec CMD]
+  can2cup watch [room…] [--interval 30] [--exec CMD] [--max-hours 12]
       Duty mode, zero tokens while waiting: sweeps every open room (or just the ones given) plus the
-      principal inbox every --interval seconds with zero-wait polls (long-polling would burn the relay's
-      Durable Object duration quota); only when REAL content arrives does it print and exit 0. Run it in
-      the background and let its exit wake your agent — do NOT idle-loop can2cup_wait in a session.
-      --exec CMD pipes content to CMD's stdin and keeps watching (and acks on a zero exit). A room failing
-      10 sweeps in a row is muted (the rest stay watched); exit 1 only when every room is failing.
+      principal inbox every --interval seconds (at least 15; the relay may ask for longer when nothing is
+      happening) with zero-wait polls (long-polling would burn the relay's Durable Object duration quota);
+      only when REAL content arrives does it print and exit 0. Run it in the background and let its exit
+      wake your agent — do NOT idle-loop can2cup_wait in a session. When the relay is busy or unreachable
+      (429 / 5xx / network) the sweep backs off, doubling up to 5 min.
+      --max-hours H (default 12 without --exec, off with it): after H hours with nothing new it prints
+      "duty ended" and exits 0 — start it again if your principal still expects you to be reachable.
+      --exec CMD pipes content to CMD's stdin and keeps watching (and acks on a zero exit). A room refused
+      10 sweeps in a row (401 / 403 / 404 / 410) is muted (the rest stay watched).
       Do NOT wrap this in your own restart loop (\`while true; do can2cup watch; done\`) unless you also
       ack/tell what it prints: unacked content is found again on every restart, so a bare loop spins on
       the same item instead of waiting. Either handle+ack each exit before restarting, or use --exec.
@@ -929,14 +933,33 @@ async function main(): Promise<void> {
       // active the whole time and burned the free tier's daily duration quota in one day of duty
       // (2026-08-21, "Exceeded allowed duration in Durable Objects free tier"). wait=0 polls cost the
       // DO milliseconds; the waiting happens here, in this process, for free.
-      const interval = Number(flag("interval") ?? flag("timeout") ?? 30) || 30; // --timeout kept as a legacy alias; 30 s (was 25)
+      // 2026-09-14: the relay's daily write cap was spent three days running (2026-09-11..13) by our own clients'
+      // polling — one orphaned `watch --interval 5` alone made ~1,175 inbox reads an hour. Since then: a floor under
+      // --interval, the relay's pacing hints honoured, exponential backoff while the relay is busy or down, and
+      // --max-hours so a watch nobody reads any more stands down by itself.
+      // Deliberately NOT done: noticing that the session which started this watch is gone by enumerating processes
+      // (ps / wmic / PowerShell). This runs on managed endpoints with EDR, where a node process that keeps spawning
+      // process-discovery commands looks like malware. --max-hours is the backstop for an orphaned watch instead.
       const exec = flag("exec");
+      const floorEnv = (process.env.CAN2CUP_WATCH_MIN_INTERVAL ?? "").trim(); // tests only (smoke, probe:prod)
+      const testPacing = floorEnv !== "" && Number.isFinite(Number(floorEnv)) && Number(floorEnv) >= 0;
+      const minInterval = testPacing ? Number(floorEnv) : 15;
+      const asked = Number(flag("interval") ?? flag("timeout") ?? 30) || 30; // --timeout kept as a legacy alias; 30 s (was 25)
+      const interval = Math.max(minInterval, asked);
+      if (asked < minInterval) console.error(`watch: --interval ${asked} is below the minimum of ${minInterval} s — sweeping every ${interval} s instead`);
+      const mh = flag("max-hours");
+      const maxHours = mh === undefined ? (exec ? 0 : 12) : Number(mh) > 0 ? Number(mh) : 0;
+      const pace = watchPacer({ interval, maxHours, testPacing });
+      const trace = process.env.CAN2CUP_WATCH_TRACE === "1"; // tests only: one stderr line per finished sweep
+      let sweeps = 0;
+      const endOfSweep = async (transient: string | null) => { if (trace) console.error(`watch: sweep ${++sweeps} done`); await pace.rest(transient); };
+      const stopLine = maxHours ? `, stands down after ${maxHours} h with nothing new` : "";
       let rooms: string[] = [];
       for (let k = 1; k < argv.length; k++) { if (argv[k].startsWith("--")) { k++; continue; } rooms.push(argv[k]); }
       if (!rooms.length) rooms = Object.values(loadRooms()).filter((r) => r.state === "open").map((r) => r.id);
       if (!rooms.length) {
         // Fresh install: no room yet, but a LINE-bound principal may /a us any minute. Inbox-only duty.
-        console.error(`no open rooms — watching the principal inbox only (sweep every ${interval}s; content ${exec ? `→ ${exec}` : "→ stdout, then exit 0"}). Join a room and restart watch to cover it too.`);
+        console.error(`no open rooms — watching the principal inbox only (sweep every ${interval}s${stopLine}; content ${exec ? `→ ${exec}` : "→ stdout, then exit 0"}). Join a room and restart watch to cover it too.`);
         for (;;) {
           refreshDuty();
           {
@@ -946,20 +969,22 @@ async function main(): Promise<void> {
               return;
             }
           }
+          { const ended = pace.ended(); if (ended) { console.log(ended); return; } }
+          let transient: string | null = null;
           try {
-            const o = await c.opInboxPeek(false);
+            const o = await c.opInboxPeek(false, { throwOnFail: true });
             if (!o.empty) {
               const text = `=== can2cup watch: principal instruction(s) ===\n${c.outText(o)}${exec ? "" : NOT_ACKED_HINT}`;
-              if (exec) { console.error(text); const rr = spawnSync(exec, { shell: true, input: text, stdio: ["pipe", "inherit", "inherit"] } as never) as { status: number | null }; if (rr.status === 0) await c.opAck().catch(() => undefined); else console.error(`watch: --exec exited ${rr.status}; not acked`); }
+              if (exec) { pace.content(); console.error(text); const rr = spawnSync(exec, { shell: true, input: text, stdio: ["pipe", "inherit", "inherit"] } as never) as { status: number | null }; if (rr.status === 0) await c.opAck().catch(() => undefined); else console.error(`watch: --exec exited ${rr.status}; not acked`); }
               else { console.log(text); return; }
             }
-            // review C11: a room may have appeared (invite accepted, /room handled) — switch to the room loop
-            if (Object.values(loadRooms()).some((r) => r.state === "open")) { console.error("watch: a room opened — restarting duty with rooms"); releaseDuty(); const rr = spawnSync(process.execPath, [process.argv[1], ...process.argv.slice(2)], { stdio: "inherit" }); process.exit(rr.status ?? 0); }
-          } catch (e) { console.error(`watch: inbox error: ${e instanceof Error ? e.message : e}`); }
-          await new Promise((r) => setTimeout(r, interval * 1000));
+          } catch (e) { transient = watchTransient(e); console.error(`watch: inbox error: ${e instanceof Error ? e.message : e}`); }
+          // review C11: a room may have appeared (invite accepted, /room handled) — switch to the room loop
+          if (Object.values(loadRooms()).some((r) => r.state === "open")) { console.error("watch: a room opened — restarting duty with rooms"); releaseDuty(); const rr = spawnSync(process.execPath, [process.argv[1], ...process.argv.slice(2)], { stdio: "inherit" }); process.exit(rr.status ?? 0); }
+          await endOfSweep(transient);
         }
       }
-      console.error(`watching ${rooms.join(", ")} + principal inbox (sweep every ${interval}s, zero-wait polls; content ${exec ? `→ ${exec}` : "→ stdout, then exit 0"})`);
+      console.error(`watching ${rooms.join(", ")} + principal inbox (sweep every ${interval}s, zero-wait polls${stopLine}; content ${exec ? `→ ${exec}` : "→ stdout, then exit 0"})`);
       const fails = new Map<string, number>(); // one broken room must not kill the whole duty (it did, once)
       const MUTE_AT = 10;
       let inboxOnly = false; // v0.7.9: every room dead (e.g. rooms from a relay that no longer exists) ≠ off duty
@@ -983,19 +1008,21 @@ async function main(): Promise<void> {
       for (;;) {
         refreshDuty();
         { const drift = installedElsewhere(); if (drift) { console.log(drift); return; } }
+        { const ended = pace.ended(); if (ended) { console.log(ended); return; } }
         // review C11: rooms joined or created since we started (LINE invites, /room requests) get watched too.
         for (const r of Object.values(loadRooms())) if (r.state === "open" && !rooms.includes(r.id)) rooms.push(r.id);
+        let transient: string | null = null; // set when the relay was busy or unreachable this sweep → back off
         // traffic fix: the principal inbox once per sweep, then each room without re-reading it
         try {
-          const ib = await c.opInboxPeek(false);
+          const ib = await c.opInboxPeek(false, { throwOnFail: true });
           upgradeOnce();
           if (!ib.empty) {
             const text = withUpgrade(`=== can2cup watch: principal instruction(s) ===
 ${c.outText(ib)}${exec ? "" : NOT_ACKED_HINT}`);
-            if (exec) { console.error(text); const rr = spawnSync(exec, { shell: true, input: text, stdio: ["pipe", "inherit", "inherit"] } as never) as { status: number | null }; if (rr.status === 0) await c.opAck().catch(() => undefined); }
+            if (exec) { pace.content(); console.error(text); const rr = spawnSync(exec, { shell: true, input: text, stdio: ["pipe", "inherit", "inherit"] } as never) as { status: number | null }; if (rr.status === 0) await c.opAck().catch(() => undefined); }
             else { console.log(text); return; }
           }
-        } catch (e) { console.error(`watch: inbox error: ${e instanceof Error ? e.message : e}`); }
+        } catch (e) { transient = watchTransient(e); console.error(`watch: inbox error: ${e instanceof Error ? e.message : e}`); }
         for (const room of rooms) {
           if ((fails.get(room) ?? 0) >= MUTE_AT) continue;
           try {
@@ -1003,34 +1030,78 @@ ${c.outText(ib)}${exec ? "" : NOT_ACKED_HINT}`);
             fails.set(room, 0);
             if (o.empty) continue;
             const text = withUpgrade(`=== can2cup watch: content (while polling room ${room}) ===\n${c.outText(o)}${exec ? "" : NOT_ACKED_HINT}`);
-            if (exec) { console.error(text); const rr = spawnSync(exec, { shell: true, input: text, stdio: ["pipe", "inherit", "inherit"] } as never) as { status: number | null }; if (rr.status === 0) await c.opAck().catch(() => undefined); else console.error(`watch: --exec exited ${rr.status}; not acked — the relay will remind your principal`); continue; }
+            if (exec) { pace.content(); console.error(text); const rr = spawnSync(exec, { shell: true, input: text, stdio: ["pipe", "inherit", "inherit"] } as never) as { status: number | null }; if (rr.status === 0) await c.opAck().catch(() => undefined); else console.error(`watch: --exec exited ${rr.status}; not acked — the relay will remind your principal`); continue; }
             console.log(text);
             return;
           } catch (e) {
+            // 2026-09-14: only a relay that REFUSES the room counts toward muting it. A 5xx / 429 / network error says
+            // nothing about the room — during the write-cap outage 500s muted healthy rooms for the rest of the watch.
+            const t = watchTransient(e);
+            if (t) { transient ??= t; console.error(`watch: room ${room} error (${t}, not counted toward muting): ${e instanceof Error ? e.message : e}`); continue; }
+            if (e instanceof RelayError && ![401, 403, 404, 410].includes(e.status)) { console.error(`watch: room ${room} error (not counted toward muting): ${e.message}`); continue; }
             const n = (fails.get(room) ?? 0) + 1;
             fails.set(room, n);
             console.error(`watch: room ${room} error ${n}/${MUTE_AT}: ${e instanceof Error ? e.message : e}`);
             if (n === MUTE_AT) console.error(`watch: room ${room} muted after ${MUTE_AT} consecutive errors — still watching the rest; restart watch to retry it`);
           }
         }
-        if (rooms.every((r) => (fails.get(r) ?? 0) >= MUTE_AT)) {
+        if (rooms.every((r) => (fails.get(r) ?? 0) >= MUTE_AT) && !inboxOnly) {
           // v0.7.9: the rooms are dead, the principal is not. the first external user's first day (2026-09-04): their only room lived on
           // the old relay, 10× 401 muted it, and watch exited — so her LINE /a went unread. Keep sweeping the inbox.
-          if (!inboxOnly) { inboxOnly = true; console.error("watch: every room is failing — switching to principal-inbox-only duty (leave or close the dead rooms to silence this; restart watch to retry them)"); }
-          try {
-            const o = await c.opInboxPeek(false);
-            if (!o.empty) {
-              const text = `=== can2cup watch: principal instruction(s) ===\n${c.outText(o)}${exec ? "" : NOT_ACKED_HINT}`;
-              if (exec) { console.error(text); const rr = spawnSync(exec, { shell: true, input: text, stdio: ["pipe", "inherit", "inherit"] } as never) as { status: number | null }; if (rr.status === 0) await c.opAck().catch(() => undefined); }
-              else { console.log(text); return; }
-            }
-          } catch (e) { console.error(`watch: inbox error: ${e instanceof Error ? e.message : e}`); }
+          // 2026-09-14: the inbox is already read once at the top of every sweep; this used to read it a second time.
+          inboxOnly = true;
+          console.error("watch: every room is failing — switching to principal-inbox-only duty (leave or close the dead rooms to silence this; restart watch to retry them)");
         }
-        await new Promise((r) => setTimeout(r, interval * 1000));
+        await endOfSweep(transient);
       }
     }
     default: usage();
   }
+}
+
+/** 2026-09-14: is this sweep error the relay being busy or unreachable (→ back off, never mute a room for it)?
+ *  Returns a short label, or null for an answer that is about the request itself. */
+function watchTransient(e: unknown): string | null {
+  if (e instanceof RelayError) return e.status === 429 || e.status >= 500 ? `relay ${e.status}` : null;
+  const code = (e as { cause?: { code?: string } } | null)?.cause?.code;
+  const msg = e instanceof Error ? e.message : String(e);
+  if (code || (e instanceof TypeError && /fetch failed/i.test(msg)) || /ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|UND_ERR/i.test(msg)) return `network error${code ? ` ${code}` : ""}`;
+  return null;
+}
+
+/** 2026-09-14: how long `can2cup watch` rests between sweeps, and when it stands down.
+ *  - normal sweep: max(--interval, the relay's hint: x-can2cup-poll-after / Retry-After), hint capped at 5 min;
+ *  - a sweep that met a 429 / 5xx / network error: doubles each time, up to 5 min;
+ *  - --max-hours: after that long with nothing new, ended() returns the stand-down text (every rest is cut to fit).
+ *  testPacing (CAN2CUP_WATCH_MIN_INTERVAL set — smoke, probe:prod): hints ignored, backoff capped at 2 × interval. */
+function watchPacer(o: { interval: number; maxHours: number; testPacing: boolean }) {
+  const MAX_BACKOFF_SEC = 300;
+  const maxMs = o.maxHours > 0 ? o.maxHours * 3_600_000 : 0;
+  let quietSince = Date.now();
+  let level = 0;
+  return {
+    /** content was handed on (--exec keeps watching): the quiet clock starts over */
+    content(): void { quietSince = Date.now(); },
+    ended(): string | null {
+      if (!maxMs || Date.now() - quietSince < maxMs) return null;
+      return `=== can2cup watch: duty ended after ${o.maxHours} h with nothing new ===\nNothing arrived for ${o.maxHours} h, so this watch stood down by itself (a watch nobody reads would otherwise poll the relay forever).\nIf your principal still expects you to be reachable, start duty again (same command).`;
+    },
+    async rest(transient: string | null): Promise<void> {
+      const hint = Math.min(MAX_BACKOFF_SEC, takePollHint() ?? 0);
+      let sec: number;
+      if (transient) {
+        level = Math.min(level + 1, 16);
+        const cap = o.testPacing ? o.interval * 2 : Math.max(MAX_BACKOFF_SEC, o.interval);
+        sec = Math.min(cap, Math.max(o.interval, o.testPacing ? 0 : hint) * 2 ** level);
+        console.error(`watch: ${transient} — backing off, next sweep in ${Math.round(sec)} s`);
+      } else {
+        level = 0;
+        sec = o.testPacing ? o.interval : Math.max(o.interval, hint);
+      }
+      if (maxMs) sec = Math.min(sec, Math.max(0, (quietSince + maxMs - Date.now()) / 1000));
+      await new Promise((r) => setTimeout(r, sec * 1000));
+    },
+  };
 }
 
 /** Copy SKILL.md into ~/.claude/skills/can2cup/ so every Claude Code session can learn can2cup by itself. */

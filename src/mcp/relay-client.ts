@@ -6,19 +6,44 @@ import { CLIENT_VERSION, noteRelayVersions } from "./version.js";
 export const INSTANCE_ID = randomBytes(6).toString("hex");
 
 export class RelayError extends Error {
-  constructor(public status: number, public payload: Record<string, unknown>) {
+  constructor(public status: number, public payload: Record<string, unknown>, public headers: Headers = new Headers()) {
     super(`relay ${status}: ${String(payload.error ?? JSON.stringify(payload))}`);
   }
+  /** Seconds the relay asked for (Retry-After / x-can2cup-poll-after) on this error response, if any. */
+  get retryAfterSec(): number | null { return pollHintOf(this.headers); }
 }
+
+/** 2026-09-14: the relay paces idle polls — `x-can2cup-poll-after` on an empty inbox / room poll, `Retry-After` on a
+ *  429. The larger of the two, in seconds, or null when the response carried neither. */
+function pollHintOf(h: Headers): number | null {
+  const vals: number[] = [];
+  const pa = Number(h.get("x-can2cup-poll-after"));
+  if (Number.isFinite(pa) && pa > 0) vals.push(pa);
+  const ra = (h.get("retry-after") ?? "").trim();
+  if (ra) {
+    const n = Number(ra);
+    if (Number.isFinite(n)) { if (n > 0) vals.push(n); }
+    else { const t = Date.parse(ra); if (t) vals.push(Math.max(0, Math.ceil((t - Date.now()) / 1000))); }
+  }
+  return vals.length ? Math.max(...vals) : null;
+}
+let lastHint: { sec: number; at: number } | null = null;
+let pendingHint: number | null = null;
+/** The last pacing hint any relay response carried (successful ones too). */
+export function lastPollHint(): { sec: number; at: number } | null { return lastHint; }
+/** The largest pacing hint seen since the previous call, then forgotten — what one watch sweep was told. */
+export function takePollHint(): number | null { const v = pendingHint; pendingHint = null; return v; }
 
 async function call<T>(url: string, init: RequestInit): Promise<T> {
   // v0.9.0 upgrade protocol: every call says which client this is; every reply says what the relay serves / requires.
   const res = await fetch(url, { ...init, headers: { "content-type": "application/json", "x-can2cup-client": CLIENT_VERSION, ...(init.headers ?? {}) } });
   noteRelayVersions(res.headers.get("x-can2cup-latest"), res.headers.get("x-can2cup-min"));
+  const hint = pollHintOf(res.headers);
+  if (hint != null) { lastHint = { sec: hint, at: Date.now() }; pendingHint = Math.max(pendingHint ?? 0, hint); }
   const text = await res.text();
   let json: Record<string, unknown> = {};
   try { json = text ? JSON.parse(text) : {}; } catch { json = { error: text.slice(0, 200) }; }
-  if (!res.ok) throw new RelayError(res.status, json);
+  if (!res.ok) throw new RelayError(res.status, json, res.headers);
   return json as T;
 }
 
