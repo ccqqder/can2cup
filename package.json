@@ -45,6 +45,7 @@
     "check:line": "node scripts/line-webhook-check.mjs",
     "check:discord": "node scripts/discord-check.mjs",
     "check:telegram": "node scripts/telegram-check.mjs",
+    "check:line-app": "node scripts/line-app-check.mjs",
     "check:chat": "node scripts/chat-e2e.mjs",
     "probe:prod": "node scripts/probe-prod.mjs",
     "telegram:app": "node scripts/telegram-app.mjs",

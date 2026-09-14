@@ -14,6 +14,7 @@ npx wrangler secret put RELAY_SIGNING_KEY  # hex ed25519 private key: node -e "i
                                         # GET / then advertises the pubkey; clients pin it per room. Rotating it makes old rooms' system events unverifiable — avoid.
 RELAY=http://127.0.0.1:8787 RELAY_KEY=dev BRIDGE_KEY=devbridge npm run smoke   # two MCP servers through a relay + a simulated bot, ~430 checks
 npm run check:line / check:discord / check:telegram   # one adapter each, forged webhooks against the dev relay
+npm run check:line-app                  # line-app.mjs show / app / menus against a fake LINE API (no relay, no token)
 npm run check:chat                      # the two-human story over LINE, Discord and Telegram with real clients (docs/chat-e2e.md)
 npm run probe:prod -- --relay https://<relay>   # after a deploy: production routes, secrets, one forged /a round trip on this machine's chat app
 npm run check:routes                    # [[routes]] vs RELAY_CANONICAL / RELAY_ALIASES; release:relay runs it first
@@ -22,7 +23,7 @@ npm run assemble:assets -- --out <dir> [--overlay <dir>] [--dl <dir>]   # a comp
 npm run mirror:dl -- --version <x.y.z> --out <dir>   # the signed install files of a release, verified, without the key
 ```
 
-`discord-app.mjs app`, `telegram-app.mjs describe|app|say|tap` and `probe-prod.mjs` have no default relay: pass
+`discord-app.mjs app`, `line-app.mjs app`, `telegram-app.mjs describe|app|say|tap` and `probe-prod.mjs` have no default relay: pass
 `--relay https://<relay>`. `telegram-app.mjs tap` names the bot from `--bot-username` (else `TELEGRAM_BOT_USERNAME`).
 
 ### The assets directory of another deployment

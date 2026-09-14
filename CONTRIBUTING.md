@@ -37,6 +37,7 @@ half as `DISCORD_PUBLIC_KEY`, `TELEGRAM_WEBHOOK_SECRET=devtelegramsecret0000`), 
 | `npm run test:framing` · `npm run test:mechanism` | unit tests for peer-string framing and the sealed-bid mechanism |
 | `npm run check:line` · `check:discord` · `check:telegram` | one adapter each: forged, correctly signed webhooks against the dev relay; replies read back from the debug push queue |
 | `npm run check:chat` | **the product story**: two forged people in one group, each with a REAL client, on all three apps — bind, `/a`, wire, join, talk, mirror, brake, unbind ([docs/chat-e2e.md](docs/chat-e2e.md)) |
+| `npm run check:line-app` | `scripts/line-app.mjs` (`show`, `app`, `menus`) against a fake LINE API on 127.0.0.1: call order, refusals, dry run, rollback; no relay, no LINE account |
 | `npm run check:routes` | `[[routes]]` agrees with `RELAY_CANONICAL` / `RELAY_ALIASES` |
 | `npm run check:i18n` | every sentence the bot says is a `tr()` literal with an entry in each `src/relay/i18n/*.json`, same placeholders; no Chinese string escapes it |
 | `npm run probe:prod -- --relay <url>` | after a deploy, against production: routes refuse bad signatures, secrets are ours, one forged `/a` round trip |
