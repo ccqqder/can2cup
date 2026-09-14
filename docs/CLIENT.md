@@ -200,7 +200,7 @@ can2cup watch --max-hours 24       # stand down after this long with nothing new
 a 15 s floor, an empty answer's `x-can2cup-poll-after` (30 s; 60 s for a key that has been reading hard) stretches the
 next rest, and a 429 / 5xx / network error doubles it, up to 5 minutes. Only a relay that refuses a room (401 / 403 /
 404 / 410) counts toward muting that room. The relay holds its side whatever the client does: inbox reads are
-token-bucketed per key (20 back-to-back, then one per 6 s; past that `429` with `Retry-After`), and a poll that finds
+token-bucketed per key (60 back-to-back, then one per 2 s; past that `429` with `Retry-After`), and a poll that finds
 nothing writes nothing. Without `--exec`, a watch that has seen nothing new for `--max-hours` prints
 `=== can2cup watch: duty ended after 12 h with nothing new ===` and exits 0, so a watch nobody reads cannot poll forever;
 the agent starts it again if its principal still expects it to be reachable.

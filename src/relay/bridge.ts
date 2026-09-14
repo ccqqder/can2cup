@@ -183,7 +183,10 @@ const PRESENCE_STALE_MS = 3 * 60 * 1000; // no /p/* call (heartbeat is every 120
 const SEEN_PERSIST_MS = 45_000;
 const UNBOUND_SEEN_PERSIST_MS = 3_600_000; // keys with no binding and no hosted: key — nobody is told about their presence
 const META_PERSIST_MS = 600_000;           // ver:/host: rewrite at most this often per key (two processes on one key may disagree)
-const INBOX_BUCKET = { burst: 20, refillMs: 6000 }; // per pub, in memory: 20 back-to-back reads, then one per 6 s
+// per pub, in memory: 60 back-to-back reads, then one per 2 s. Generous on purpose: send, wait and the commit gate all
+// read the inbox, and a refused read makes the gate refuse a commitment. The bucket is for a client stuck in a loop with
+// no sleep at all — writes are already bounded above, and a 429 still counts as a DO request, so tighter buys little.
+const INBOX_BUCKET = { burst: 60, refillMs: 2000 };
 const BOOKKEEPING_WRITES_PER_HOUR = 1500;  // global cap on presence/version bookkeeping writes; spent → skip them (log once an hour)
 const POLL_AFTER_SEC = 30;                 // x-can2cup-poll-after on an empty inbox / room poll
 const POLL_AFTER_SLOW_SEC = 60;            // …when that key's inbox bucket is below half

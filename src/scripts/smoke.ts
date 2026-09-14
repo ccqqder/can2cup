@@ -18,7 +18,7 @@
  *   suite spawns inherits CAN2CUP_WATCH_MIN_INTERVAL=1, so `--interval 1` is not raised to the 15 s duty minimum.
  *   The suite drives Alice's key far faster than any agent would (every send and wait reads her inbox), so it lifts
  *   the relay's /p/inbox token bucket relay-wide at the start (POST /bridge/debug/inbox-bucket) and gives the
- *   write-budget agents the production numbers (20 back-to-back, one per 6 s) back; it clears the override at the end.
+ *   write-budget agents the production numbers (60 back-to-back, one per 2 s) back; it clears the override at the end.
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -1846,7 +1846,7 @@ if (RELAY2) {
   type Writes = { put: number; delete: number; setAlarm: number; total: number; setAlarmRequest: number; setAlarmAlarm: number; forPub: number; keys: Record<string, number>; inboxCalls: number };
   type Id = { pub: string; priv: string };
   const cliPath = path.resolve("dist/cli/index.js");
-  const PROD_BUCKET = (pub: string) => ({ pub, burst: 20, refillMs: 6000 });
+  const PROD_BUCKET = (pub: string) => ({ pub, burst: 60, refillMs: 2000 });
   const writes =(pub: string, reset = false) => bridgeGet<Writes>(`/bridge/debug/writes?pub=${pub}${reset ? "&reset=1" : ""}`);
   const sGet = (p: string, id: Id, ver = pkgVersion) => fetch(`${RELAY}${p}`, { headers: { "x-can2cup-client": ver, ...signRequestHeaders("GET", p.split("?")[0], "", id) } });
   const sPost = (p: string, body: unknown, id: Id, ver = pkgVersion) => { const raw = JSON.stringify(body); return fetch(`${RELAY}${p}`, { method: "POST", body: raw, headers: { "content-type": "application/json", "x-can2cup-client": ver, ...signRequestHeaders("POST", p, raw, id) } }); };
@@ -1892,7 +1892,8 @@ if (RELAY2) {
   await bridgePost("/bridge/debug/inbox-bucket", PROD_BUCKET(A.id.pub)); // a full burst again (the reads above spent some)
   const statuses: number[] = [];
   let pa30 = false, pa60 = false;
-  for (let i = 0; i < 40; i++) {
+  // 36 reads: past half of the 60-token burst, so the slow hint (60) shows up too
+  for (let i = 0; i < 48; i++) {
     if (i % 4 === 3) { await (await sPost("/p/heartbeat", {}, A.id)).arrayBuffer(); continue; }
     const r = await sGet(`/p/inbox?since=${seqA}&instance=smoke`, A.id);
     statuses.push(r.status);
@@ -1902,11 +1903,11 @@ if (RELAY2) {
     await r.arrayBuffer();
   }
   const wIdle = await writes(A.id.pub, true);
-  expect(statuses.filter((s) => s === 200).length >= 20 && wIdle.forPub <= 1 && wIdle.setAlarmRequest <= 1, `30 empty inbox polls + 10 heartbeats inside the persist interval: ${wIdle.forPub} write(s) for that agent, ${wIdle.setAlarmRequest} alarm(s) armed (was ~3 rows per poll); ${statuses.filter((s) => s === 200).length}/30 polls answered 200 — ${JSON.stringify(wIdle.keys)}`);
+  expect(statuses.filter((s) => s === 200).length >= 30 && wIdle.forPub <= 1 && wIdle.setAlarmRequest <= 1, `36 empty inbox polls + 12 heartbeats inside the persist interval: ${wIdle.forPub} write(s) for that agent, ${wIdle.setAlarmRequest} alarm(s) armed (was ~3 rows per poll); ${statuses.filter((s) => s === 200).length}/36 polls answered 200 — ${JSON.stringify(wIdle.keys)}`);
   expect(pa30 && pa60, "an empty inbox answer carries x-can2cup-poll-after: 30, and 60 once that key has been reading hard");
 
   let first429: Response | null = null;
-  for (let i = 0; i < 25 && !first429; i++) { const r = await sGet(`/p/inbox?since=${seqA}&instance=smoke`, A.id); if (r.status === 429) first429 = r; else await r.arrayBuffer(); }
+  for (let i = 0; i < 80 && !first429; i++) { const r = await sGet(`/p/inbox?since=${seqA}&instance=smoke`, A.id); if (r.status === 429) first429 = r; else await r.arrayBuffer(); }
   const retryAfter = Number(first429?.headers.get("retry-after"));
   await first429?.arrayBuffer();
   expect(!!first429 && retryAfter > 0, `back-to-back inbox reads are refused with 429 + Retry-After (${retryAfter} s) once the key's burst is spent`);
