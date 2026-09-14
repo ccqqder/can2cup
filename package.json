@@ -34,6 +34,8 @@
     "release:key": "node scripts/release-key.mjs",
     "release:npm": "node scripts/release-npm.mjs",
     "check:routes": "node scripts/routes-check.mjs",
+    "assemble:assets": "node scripts/assemble-assets.mjs",
+    "mirror:dl": "node scripts/mirror-dl.mjs",
     "check:pii": "node scripts/pii-check.mjs --tree",
     "check:i18n": "node scripts/i18n-check.mjs",
     "smoke": "node dist/scripts/smoke.js",
