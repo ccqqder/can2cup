@@ -28,6 +28,13 @@
 
 <br clear="all">
 
+## 只想用 bot?
+
+[使用指南](https://can2cup.com/guide/)([English](https://can2cup.com/guide/en/))會一步步帶你用 LINE(`@789jxzby`)、
+Telegram([@can2cup_bot](https://t.me/can2cup_bot))或 Discord 上的 bot:第一次設定、每天怎麼用、群組、安全、怎麼退出,
+不需要寫程式。這個 bot 跑在 `can2cup.com`,是作者的概念驗證部署:不承諾可用性,可能隨時重置。它怎麼部署、存了什麼、
+會撞到哪些額度:[ccqqder/can2cup-deploy](https://github.com/ccqqder/can2cup-deploy)。
+
 ## 60 秒安裝
 
 ```bash
@@ -36,15 +43,14 @@ can2cup setup --relay https://can2cup.com --name <your-name>
 # restart Claude Code — the can2cup_* tools appear
 ```
 
-接著,到 **LINE**(@789jxzby)、**Discord** 或 **Telegram**(@can2cup_bot)的 bot 輸入 `/setup`,把它回的第二則訊息
+接著,到聊天 app(**LINE**、**Discord** 或 **Telegram**,帳號見上一節)的 bot 輸入 `/setup`,把它回的第二則訊息
 貼給你的 agent 一次。這會把該聊天帳號綁到這個 agent(一個 agent ↔ 一個聊天帳號),讓你可以從手機驅動它:
 `/a <instruction>`、`/status`、`/pause`,以及每份 proposal 上的決策按鈕。聊天 app 是選配 ——
 不經 bot 的[直連流程](../TRUST.md#two-ways-to-run-two-trust-roots)才是安全性較高的那一層。
 
 拿到的是邀請連結?它的落地頁上就有一行可以直接貼:`npm i -g can2cup && can2cup setup --invite "<link>"`。
-不是 Claude Code?`can2cup setup --client codex|cursor|json`。給非開發者的中文安裝步驟:
-[INSTALL.zh-tw.md](../../INSTALL.zh-tw.md)。指南在 [can2cup.com/guide](https://can2cup.com/guide/)(繁體中文)與
-[can2cup.com/guide/en](https://can2cup.com/guide/en/)(英文);bot 會講七種語言,你的 agent 用你的語言(`/lang`)。程式碼、CLI 和這些文件是英文。
+不是 Claude Code?`can2cup setup --client codex|cursor|json`。bot 會講七種語言,你的 agent 用你的語言(`/lang`)。
+程式碼、CLI 和這些文件是英文。
 
 ## 運作方式
 
@@ -120,7 +126,8 @@ demo/           the parenting-agent demos (principal collapse, adversarial conta
 
 一份參考實作:協定、客戶端、中繼站、三個聊天 app 的 adapter,以及讓你自己把全部東西跑起來的文件。
 `can2cup.com` 是作者自己的部署 —— 放在那裡讓人和 agent 試用、驗證,不是對公眾提供的服務;
-不承諾可用性,可能隨時重置。試過之後預期的下一步是[自己架一個](../SELF-HOST.md):中繼站跑在免費方案上,
+不承諾可用性,可能隨時重置。它的設定、額度與出過的狀況在 [ccqqder/can2cup-deploy](https://github.com/ccqqder/can2cup-deploy),
+那是下面這些步驟的實際範例,但不是必需品:只靠這個 repository 就能架起中繼站和三個 bot。試過之後預期的下一步是[自己架一個](../SELF-HOST.md):中繼站跑在免費方案上,
 房可攜,沒有人被綁在任何人的機器上。它是**一種範式的概念驗證**(在 agent 周圍加上結構 —— 煞車、
 有簽章的紀錄、可撤銷的 grant —— 而不是寄望 agent 自己抵抗操弄),不是完成品等級的安全產品;
 [路線圖](../../ROADMAP.md)寫明了哪些是刻意留白的。

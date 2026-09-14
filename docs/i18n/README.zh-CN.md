@@ -28,6 +28,13 @@
 
 <br clear="all">
 
+## 只想用 bot?
+
+[使用指南](https://can2cup.com/guide/)([English](https://can2cup.com/guide/en/))会一步步带你使用 LINE(`@789jxzby`)、
+Telegram([@can2cup_bot](https://t.me/can2cup_bot))或 Discord 上的 bot:第一次设置、每天怎么用、群组、安全、怎么退出,
+不需要写代码。这个 bot 运行在 `can2cup.com`,是作者的概念验证部署:不承诺可用性,可能随时重置。它怎么部署、存了什么、
+会碰到哪些额度:[ccqqder/can2cup-deploy](https://github.com/ccqqder/can2cup-deploy)。
+
 ## 60 秒安装
 
 ```bash
@@ -36,15 +43,14 @@ can2cup setup --relay https://can2cup.com --name <your-name>
 # restart Claude Code — the can2cup_* tools appear
 ```
 
-接着,在 **LINE**(@789jxzby)、**Discord** 或 **Telegram**(@can2cup_bot)的 bot 里输入 `/setup`,把它回复的第二条消息
+接着,在聊天 app(**LINE**、**Discord** 或 **Telegram**,账号见上一节)的 bot 里输入 `/setup`,把它回复的第二条消息
 粘贴给你的 agent 一次。这会把该聊天账号绑定到这个 agent(一个 agent ↔ 一个聊天账号),让你可以从手机驱动它:
 `/a <instruction>`、`/status`、`/pause`,以及每份 proposal 上的决策按钮。聊天 app 是可选的 ——
 不经 bot 的[直连流程](../TRUST.md#two-ways-to-run-two-trust-roots)才是安全性更高的那一层。
 
 拿到的是邀请链接?它的落地页上就有一行可以直接粘贴:`npm i -g can2cup && can2cup setup --invite "<link>"`。
-不是 Claude Code?`can2cup setup --client codex|cursor|json`。面向非开发者的中文安装步骤:
-[INSTALL.zh-tw.md](../../INSTALL.zh-tw.md)。指南在 [can2cup.com/guide](https://can2cup.com/guide/)(繁体中文)与
-[can2cup.com/guide/en](https://can2cup.com/guide/en/)(英文);bot 会说七种语言,你的 agent 用你的语言(`/lang`)。代码、CLI 和这些文档是英文。
+不是 Claude Code?`can2cup setup --client codex|cursor|json`。bot 会说七种语言,你的 agent 用你的语言(`/lang`)。
+代码、CLI 和这些文档是英文。
 
 ## 工作原理
 
@@ -120,7 +126,8 @@ demo/           the parenting-agent demos (principal collapse, adversarial conta
 
 一份参考实现:协议、客户端、中继站、三个聊天 app 的 adapter,以及让你自己把全部东西跑起来的文档。
 `can2cup.com` 是作者自己的部署 —— 放在那里让人和 agent 试用、验证,不是面向公众提供的服务;
-不承诺可用性,可能随时重置。试过之后预期的下一步是[自己搭一个](../SELF-HOST.md):中继站运行在免费套餐上,
+不承诺可用性,可能随时重置。它的配置、额度与出过的状况在 [ccqqder/can2cup-deploy](https://github.com/ccqqder/can2cup-deploy),
+那是下面这些步骤的实际范例,但不是必需品:只靠这个仓库就能搭起中继站和三个 bot。试过之后预期的下一步是[自己搭一个](../SELF-HOST.md):中继站运行在免费套餐上,
 房可迁移,没有人被绑在任何人的机器上。它是**一种范式的概念验证**(在 agent 周围加上结构 —— 刹车、
 带签名的记录、可撤销的 grant —— 而不是指望 agent 自己抵抗操纵),不是成品级别的安全产品;
 [路线图](../../ROADMAP.md)写明了哪些是刻意留白的。

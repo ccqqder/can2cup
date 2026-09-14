@@ -27,6 +27,14 @@ who sent the agents can rest: nothing commits without them.
 
 <br clear="all">
 
+## Just want to use the bot?
+
+The [guide](https://can2cup.com/guide/en/) ([中文](https://can2cup.com/guide/)) walks you through the chat-app bot on
+LINE (`@789jxzby`), Telegram ([@can2cup_bot](https://t.me/can2cup_bot)) or Discord: the first setup, daily use, groups,
+safety and leaving, with no programming. That bot runs on `can2cup.com`, the author's proof-of-concept deployment: no
+availability promise, and it may be reset. How it is run, what it stores and which limits it runs into:
+[ccqqder/can2cup-deploy](https://github.com/ccqqder/can2cup-deploy).
+
 ## 60-second install
 
 ```bash
@@ -35,16 +43,14 @@ can2cup setup --relay https://can2cup.com --name <your-name>
 # restart Claude Code — the can2cup_* tools appear
 ```
 
-Then, in the bot on **LINE** (@789jxzby), **Discord** or **Telegram** (@can2cup_bot): `/setup`, and paste its second
+Then, in the chat-app bot (**LINE**, **Discord** or **Telegram**; handles in the section above): `/setup`, and paste its second
 message to your agent once. That binds the chat account to this agent (one agent ↔ one chat account) so you can drive it
 from your phone: `/a <instruction>`, `/status`, `/pause`, decision buttons on every proposal. The chat app is optional —
 the [direct flow](docs/TRUST.md#two-ways-to-run-two-trust-roots) with no bot is the higher-security tier.
 
 Got an invite link instead? Its landing page has one line to paste: `npm i -g can2cup && can2cup setup --invite "<link>"`.
-Not Claude Code? `can2cup setup --client codex|cursor|json`. Non-developer walkthrough in Chinese:
-[INSTALL.zh-tw.md](INSTALL.zh-tw.md). The guide is at [can2cup.com/guide/en](https://can2cup.com/guide/en/) (English) and
-[can2cup.com/guide](https://can2cup.com/guide/) (Traditional Chinese); the bot speaks seven languages and your agent speaks
-yours (`/lang`). The code, the CLI and these docs are in English.
+Not Claude Code? `can2cup setup --client codex|cursor|json`. The bot speaks seven languages and your agent speaks yours
+(`/lang`). The code, the CLI and these docs are in English.
 
 ## How it works
 
@@ -121,7 +127,9 @@ demo/           the parenting-agent demos (principal collapse, adversarial conta
 
 A reference implementation: the protocol, the client, the relay, the three chat-app adapters, and the documentation to
 run all of it yourself. `can2cup.com` is the author's own deployment — there for people and agents to try and verify,
-not a service offered to the public; no availability promise, may be reset. The intended next step after trying it is
+not a service offered to the public; no availability promise, may be reset. Its configuration, limits and incidents are
+in [ccqqder/can2cup-deploy](https://github.com/ccqqder/can2cup-deploy), a worked example of the steps below but not a
+requirement: this repository alone is enough to run the relay and all three bots. The intended next step after trying it is
 [running your own](docs/SELF-HOST.md): the relay runs on free tiers, rooms are portable, and nobody is tied to anybody's
 machine. It is a **proof of concept for a paradigm** (structure around the agents — a brake, a signed record, a
 revocable grant — rather than hoping the agents resist manipulation), not a finished security product; the
