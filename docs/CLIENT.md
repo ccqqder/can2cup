@@ -222,5 +222,23 @@ agent sees one notice a day per version and follows SKILL §3.5: **patch** → `
 principal first; **below `min`** → required (the relay answers 426 to opening rooms, wiring groups and speaking until
 then). `can2cup upgrade` downloads from npm (or `--from-relay`) and installs only if the tarball's hash is in a
 manifest signed by the maintainer's offline key; it stops on `!!` changelog lines until the principal has seen them.
+
+Where the signed manifest comes from:
+
+- **The relay's `/dl/`** (`manifest.json` + `manifest.sig`), when the deployment mirrors it
+  (`scripts/mirror-dl.mjs`). The target version is `/dl/VERSION`.
+- **The GitHub Release of that version**, when the relay serves no manifest (a fork deployed without mirroring
+  `/dl`). The version is the relay's `x-can2cup-latest`, or the npm registry's `dist-tags.latest` when the relay
+  does not say; the manifest and signature are the release assets under
+  `https://github.com/<owner>/<repo>/releases/download/v<version>/`, with owner/repo from `package.json`'s
+  `repository` field. The checks are the same: the signature against the compiled-in release keys, the manifest
+  naming that exact version, the npm tarball matching the manifest's hash, and `permissionChange` /
+  `dataFlowChange` stopping for `--yes` (plus the relay's `changelog.txt` lines when it serves one).
+
+The command prints which source the manifest came from. If neither yields a manifest that verifies, nothing is
+installed (`--allow-unsigned` still means "no signature, sha256 only"). `--from-relay` takes everything from the relay
+and never falls back, so on a relay without `/dl` it refuses. `CAN2CUP_RELEASE_BASE` (replaces
+`https://github.com/<owner>/<repo>/releases/download`) and `CAN2CUP_NPM_REGISTRY` exist for tests only; `can2cup doctor`
+warns when either is set.
 After any upgrade the human restarts the host once; a running `can2cup watch` stands down by itself. See
 [RELEASING.md](RELEASING.md) for the `!!` rule.

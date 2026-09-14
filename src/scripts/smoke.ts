@@ -933,15 +933,21 @@ expect(hostsRes.ok && Object.values(hosts.hosts).some((h) => h.agents > 0), "/ad
 // ---- v0.10.0 (security G-3 P2): signed releases. A fake relay in-process (served asynchronously — spawnSync would
 // starve it) lets every refusal path run without touching the real global install (--dry-run stops before npm).
 type FakeFiles = Record<string, string>;
-const withFakeRelay = async (files: FakeFiles, fn: (url: string) => Promise<void>): Promise<void> => {
+// `files` may be a function of the server's own URL (a fake npm registry names its tarball by absolute URL); `headers`
+// go on every reply (a relay without /dl still says x-can2cup-latest).
+const withFakeRelay = async (files: FakeFiles | ((url: string) => FakeFiles), fn: (url: string) => Promise<void>, headers: Record<string, string> = {}): Promise<void> => {
+  let table: FakeFiles = {};
   const srv = http.createServer((req, res) => {
+    for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
     const p = (req.url ?? "/").split("?")[0];
-    if (p in files) { res.end(files[p]); return; }
+    if (p in table) { res.end(table[p]); return; }
     if (p === "/") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true, service: "can2cup-relay", v: 1 })); return; }
     res.statusCode = 404; res.end("no");
   });
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
-  try { await fn(`http://127.0.0.1:${(srv.address() as { port: number }).port}`); } finally { srv.close(); }
+  const url = `http://127.0.0.1:${(srv.address() as { port: number }).port}`;
+  table = typeof files === "function" ? files(url) : files;
+  try { await fn(url); } finally { srv.close(); }
 };
 const upgradeAgainst = (url: string, env: Record<string, string>, ...args: string[]) => new Promise<{ status: number | null; out: string }>((resolve) => {
   const child = spawnChild(process.execPath, [path.resolve("dist/cli/index.js"), "upgrade", "--from-relay", ...args], { env: { ...ginaNoKey, PARLEY_RELAY: url, ...env } });
@@ -981,6 +987,41 @@ await withFakeRelay({ "/dl/VERSION": "99.0.0\n", "/dl/VERSION.sha256": `${tgzSha
   const r3 = await upgradeAgainst(u, trust, "--dry-run", "--allow-unsigned", "--require-checksum"); expect(r3.status === 0, "--require-checksum is satisfied by VERSION.sha256 when the relay has one");
 });
 await withFakeRelay(relayFiles(mkManifest({ permissionChange: true })), async (u) => { const r = await upgradeAgainst(u, trust, "--dry-run"); expect(r.status === 3 && /PERMISSION CHANGE \(declared in the signed manifest\)/.test(r.out), "a manifest flagged permissionChange stops for the principal even when the changelog is silent"); });
+// ---- v0.18.0: a relay deployed without mirroring /dl. The signed manifest comes from the GitHub Release of the version
+// the relay advertises (x-can2cup-latest, else npm's dist-tags.latest), the bytes from npm, and every check still applies.
+// Three local servers: the bare relay, the release host (CAN2CUP_RELEASE_BASE) and the npm registry (CAN2CUP_NPM_REGISTRY).
+{
+  const upgradeVia = (url: string, env: Record<string, string>, ...args: string[]) => new Promise<{ status: number | null; out: string }>((resolve) => {
+    const child = spawnChild(process.execPath, [path.resolve("dist/cli/index.js"), "upgrade", ...args], { env: { ...ginaNoKey, PARLEY_RELAY: url, ...env } });
+    let out = ""; child.stdout.on("data", (d: Buffer) => { out += d.toString(); }); child.stderr.on("data", (d: Buffer) => { out += d.toString(); });
+    child.on("close", (status: number | null) => resolve({ status: process.platform === "win32" && status === 3221226505 ? winExit(out) : status, out }));
+  });
+  const releaseFiles = (m: Record<string, unknown> = mkManifest(), sig = signedBy(m)): FakeFiles => ({ "/v99.0.0/manifest.json": JSON.stringify(m), "/v99.0.0/manifest.sig": sig + "\n", "/v99.0.0/VERSION.sha256": `${tgzSha}  can2cup.tgz\n` });
+  const npmFiles = (npm: string, body: string): FakeFiles => ({ "/can2cup": JSON.stringify({ name: "can2cup", "dist-tags": { latest: "99.0.0" } }), "/can2cup/99.0.0": JSON.stringify({ name: "can2cup", version: "99.0.0", dist: { tarball: `${npm}/can2cup/-/can2cup-99.0.0.tgz` } }), "/can2cup/-/can2cup-99.0.0.tgz": body });
+  const viaRelease = async (o: { release?: FakeFiles; npmBody?: string; header?: boolean }, ...args: string[]) => {
+    let r: { status: number | null; out: string } = { status: null, out: "" };
+    await withFakeRelay({}, (relayUrl) => withFakeRelay(o.release ?? releaseFiles(), (rel) => withFakeRelay((npm) => npmFiles(npm, o.npmBody ?? tgzBody), async (npm) => {
+      r = await upgradeVia(relayUrl, { ...trust, CAN2CUP_RELEASE_BASE: rel, CAN2CUP_NPM_REGISTRY: npm }, ...args);
+    })), o.header === false ? {} : { "x-can2cup-latest": "99.0.0" });
+    return r;
+  };
+  const ok1 = await viaRelease({}, "--dry-run");
+  expect(ok1.status === 0 && /would install can2cup 99\.0\.0/.test(ok1.out) && ok1.out.includes(relKey.pub.slice(0, 8)) && /release manifest: http:\/\/127\.0\.0\.1:\d+\/v99\.0\.0\/manifest\.json \(the GitHub Release v99\.0\.0/.test(ok1.out), "a relay without /dl: the manifest signed by a trusted key comes from the GitHub Release of the relay's advertised version, the tarball from npm matches it, and the source is printed (dry run)");
+  const ok2 = await viaRelease({ header: false }, "--dry-run");
+  expect(ok2.status === 0 && /would install can2cup 99\.0\.0/.test(ok2.out) && /GitHub Release v99\.0\.0/.test(ok2.out), "…and when the relay advertises no version, npm's dist-tags.latest names the release");
+  const badSig = await viaRelease({ release: releaseFiles(mkManifest(), signedBy(mkManifest()).replace(/^[0-9a-f]/, (c) => (c === "a" ? "b" : "a"))) }, "--dry-run");
+  expect(badSig.status === 2 && /does not verify/.test(badSig.out) && !/would install/.test(badSig.out), "a release manifest with a bad signature is refused — the second source is not a weaker check");
+  const otherVer = await viaRelease({ release: releaseFiles(mkManifest({ version: "98.0.0" })) }, "--dry-run");
+  expect(otherVer.status === 2 && /names 98\.0\.0, not 99\.0\.0/.test(otherVer.out), "a validly signed release manifest naming another version than the target is refused");
+  const missing = await viaRelease({ release: {} }, "--dry-run");
+  expect(missing.status === 2 && /no signed release manifest/.test(missing.out) && /HTTP 404/.test(missing.out), "no /dl and no release manifest (404): refused as before, saying where it looked");
+  const npmBad = await viaRelease({ npmBody: "tampered bytes" }, "--dry-run");
+  expect(npmBad.status === 2 && /not in the signed manifest/.test(npmBad.out) && /npm registry serves/.test(npmBad.out), "an npm tarball whose hash the release manifest does not list is refused");
+  const flagged = await viaRelease({ release: releaseFiles(mkManifest({ dataFlowChange: true })) }, "--dry-run");
+  expect(flagged.status === 3 && /DATA FLOW \(declared in the signed manifest\)/.test(flagged.out), "a release manifest flagged dataFlowChange stops for --yes even though the relay serves no changelog");
+  const fromRelay = await viaRelease({}, "--dry-run", "--from-relay");
+  expect(fromRelay.status === 2 && /no signed release manifest/.test(fromRelay.out) && /does not mirror \/dl/.test(fromRelay.out) && !/GitHub Release v99/.test(fromRelay.out), "--from-relay on a relay without /dl refuses and does not fall back to the release");
+}
 // the real dev relay: stage-tarball wrote a manifest; verify it is well-formed and names the served tarball (signing needs the maintainer key, not tested here)
 const devManifest = (await (await fetch(`${RELAY}/dl/manifest.json`)).json()) as { version: string; files: Record<string, string> };
 expect(devManifest.version === pkgVersion && Object.values(devManifest.files).every((h) => h === shaActual), "the staged manifest names this version and the served tarball's hash");

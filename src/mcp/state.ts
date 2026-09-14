@@ -330,13 +330,13 @@ export function releaseDuty(): void {
 }
 
 /** v0.9.0: when the agent was last shown an upgrade notice for which version (one nag per version per day). */
-export interface UpgradeNag { version: string; at: string; installed?: { version: string; at: string; sha256?: string; verified?: boolean; manifestSig?: string; releasePub?: string } } // sha256/verified: v0.9.11; manifestSig/releasePub: v0.10.0
+export interface UpgradeNag { version: string; at: string; installed?: { version: string; at: string; sha256?: string; verified?: boolean; manifestSig?: string; releasePub?: string; manifestFrom?: "relay" | "release" } } // sha256/verified: v0.9.11; manifestSig/releasePub: v0.10.0; manifestFrom: v0.18.0
 export function loadUpgradeNag(): UpgradeNag | null { return readJson<UpgradeNag | null>("upgrade.json", null); }
 export function saveUpgradeNag(version: string): void { writeJson("upgrade.json", { ...(loadUpgradeNag() ?? {}), version, at: new Date().toISOString() } as UpgradeNag); }
 /** v0.9.2: what `can2cup upgrade` just put on this computer. A long-running watch compares it with
  *  its own compiled-in version: a process still executing the old code is the one thing an upgrade
  *  cannot fix by itself. */
-export function saveInstalled(version: string, extra: { sha256?: string; verified?: boolean; manifestSig?: string; releasePub?: string } = {}): void {
+export function saveInstalled(version: string, extra: { sha256?: string; verified?: boolean; manifestSig?: string; releasePub?: string; manifestFrom?: "relay" | "release" } = {}): void {
   const cur = loadUpgradeNag();
   writeJson("upgrade.json", { version: cur?.version ?? version, at: cur?.at ?? new Date().toISOString(), installed: { version, at: new Date().toISOString(), ...extra } } satisfies UpgradeNag);
 }

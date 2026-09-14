@@ -49,6 +49,7 @@ import { HOME, DEFAULT_RELAY, RELAY_KEY, type LocalRoom, loadIdentity, loadRooms
 import { relay, bridge, principalApi, dashboardLines, RelayError, takePollHint } from "../mcp/relay-client.js";
 import { changelogFlags } from "../mcp/version.js";
 import { RELEASE_PUBS, RELEASE_TARBALL, verifyManifest, type ReleaseManifest } from "../protocol/release.js";
+import { PACKAGE_NAME, advertisedLatest, fetchText, isVersion, npmLatest, npmRegistry, releaseBase, releasePage, sourceOverrides } from "./upgrade-source.js";
 /** v0.10.0: the release keys this client trusts. CAN2CUP_RELEASE_PUBS (comma-separated) overrides — dev and smoke only;
  *  a real install trusts what was compiled in, which is the whole point. */
 function trustedReleasePubs(): string[] {
@@ -166,8 +167,9 @@ function usage(): void {
   can2cup mirror <room> --add <url> [--key K]  live-replicate every append to a second relay (Nostr-style multi-home)
   can2cup mirror <room> --remove <url>      stop replicating there
   can2cup promote <room> <url>              failover: make the mirror the primary after the original relay died
-  can2cup upgrade [--force] [--yes] [--require-checksum]
-                                            download the version the relay serves, check its sha256 against /dl/VERSION.sha256, install, then
+  can2cup upgrade [--force] [--yes] [--require-checksum] [--from-relay] [--dry-run]
+                                            download the version the relay serves from npm, check it against the maintainer-signed manifest
+                                            (the relay's /dl, or the GitHub Release when the relay does not mirror /dl), install, then
                                             restart Claude Code. If the releases in between carry a "!! PERMISSION CHANGE" / "!! DATA FLOW"
                                             line it prints them and stops: show them to your principal, run again with --yes.
   can2cup doctor                            checks: node, version, identity, MCP registration, skill, chat-app binding, duty, rooms, known issues
@@ -495,72 +497,114 @@ async function main(): Promise<void> {
       // accepts (x-can2cup-min); the agent decides, and this is the one command it needs.
       const url = `${DEFAULT_RELAY}/dl/can2cup.tgz`;
       if (!DEFAULT_RELAY) { console.error("no relay configured — can2cup relay https://can2cup.com first"); process.exit(1); }
+      const fromRelay = has("from-relay");
       const getText = async (p: string, ms = 8000): Promise<string | null> => { try { const r = await fetch(`${DEFAULT_RELAY}${p}`, { signal: AbortSignal.timeout(ms) }); return r.ok ? await r.text() : null; } catch { return null; } };
-      const latest = ((await getText("/dl/VERSION")) ?? "").trim();
-      if (latest && latest === VERSION && !has("force") && !has("dry-run")) { console.log(`can2cup ${VERSION} is already the version the relay serves. (--force reinstalls anyway)`); return; }
+      let latest = ((await getText("/dl/VERSION")) ?? "").trim();
       // v0.10.0 (security G-3, P2): the release manifest is signed by the maintainer's OFFLINE key — a key that is
       // not on the relay. That separates "the maintainer published this" from "the relay is serving this today":
       // a relay operator (or whoever takes the relay over) can change every file under /dl/, but cannot produce a
       // signature this client accepts. No fallback to the bare sha256: a fallback would be the hole.
-      const manifestTxt = await getText("/dl/manifest.json");
-      const sigTxt = ((await getText("/dl/manifest.sig")) ?? "").trim();
+      let manifestTxt = await getText("/dl/manifest.json");
+      let sigTxt = ((await getText("/dl/manifest.sig")) ?? "").trim();
+      // v0.18.0: a relay deployed without mirroring /dl (scripts/mirror-dl.mjs) serves no manifest. The same signed
+      // manifest is attached to the GitHub Release of that version, so it is read from there instead — a second
+      // source, never a weaker check: the signature, the version and the tarball hash are verified exactly the same.
+      // --from-relay means "everything from the relay" and never falls back.
+      const source: "relay" | "release" | null = manifestTxt && sigTxt ? "relay" : fromRelay ? null : "release";
+      let manifestFrom = source === "relay" ? `${DEFAULT_RELAY}/dl/manifest.json` : "";
+      let versionFrom = latest ? `${DEFAULT_RELAY}/dl/VERSION` : "";
+      let relBase: string | null = null;
+      let releaseMiss = "";
+      if (source === "release") {
+        manifestTxt = null; sigTxt = "";
+        if (!isVersion(latest)) {
+          latest = "";
+          const adv = await advertisedLatest(DEFAULT_RELAY);
+          if (adv) { latest = adv; versionFrom = `the relay's x-can2cup-latest`; }
+          else { const n = await npmLatest(); if (n) { latest = n; versionFrom = `${npmRegistry()} dist-tags.latest`; } }
+        }
+        relBase = latest ? releaseBase(latest) : null;
+        if (!latest) releaseMiss = "the relay advertises no version and the npm registry named none, so there is no release to look up";
+        else if (!relBase) releaseMiss = "package.json names no GitHub repository to take the release from";
+      }
+      if (latest && latest === VERSION && !has("force") && !has("dry-run")) { console.log(`can2cup ${VERSION} is already the version the relay serves. (--force reinstalls anyway)`); return; }
+      if (relBase) {
+        const [m, s] = await Promise.all([fetchText(`${relBase}/manifest.json`), fetchText(`${relBase}/manifest.sig`)]);
+        if (m.text && (s.text ?? "").trim()) { manifestTxt = m.text; sigTxt = (s.text ?? "").trim(); manifestFrom = `${relBase}/manifest.json`; }
+        else releaseMiss = m.text ? `${relBase}/manifest.sig → ${s.why || "empty"}` : `${relBase}/manifest.json → ${m.why}`;
+      }
       let manifest: ReleaseManifest | null = null;
       let releasePub = "";
       if (!manifestTxt || !sigTxt) {
-        if (!has("allow-unsigned")) { console.error(`REFUSED: this relay serves no signed release manifest (/dl/manifest.json + /dl/manifest.sig). Since can2cup 0.10.0 an upgrade must be signed by the maintainer's release key (${trustedReleasePubs().map((p) => p.slice(0, 8) + "…").join(", ")}), not merely served by the relay. --allow-unsigned overrides (sha256 check only). Nothing was installed.`); process.exit(2); }
+        if (!has("allow-unsigned")) {
+          const keys = trustedReleasePubs().map((p) => p.slice(0, 8) + "…").join(", ");
+          if (fromRelay) console.error(`REFUSED: this relay serves no signed release manifest (/dl/manifest.json + /dl/manifest.sig) — it does not mirror /dl, and --from-relay takes everything from the relay. Run  can2cup upgrade  without --from-relay: the signed manifest then comes from the GitHub Release and the bytes from the npm registry. Since can2cup 0.10.0 an upgrade must be signed by the maintainer's release key (${keys}). Nothing was installed.`);
+          else console.error(`REFUSED: this relay serves no signed release manifest (/dl/manifest.json + /dl/manifest.sig), and the GitHub Release has none either (${releaseMiss}). Since can2cup 0.10.0 an upgrade must be signed by the maintainer's release key (${keys}), not merely served by the relay. --allow-unsigned overrides (sha256 check only). Nothing was installed.`);
+          process.exit(2);
+        }
         console.error("note: --allow-unsigned — no release signature; only the sha256 the relay advertises will be checked.");
       } else {
-        try { manifest = JSON.parse(manifestTxt) as ReleaseManifest; } catch { console.error("REFUSED: /dl/manifest.json is not JSON. Nothing was installed."); process.exit(2); }
+        const where = source === "relay" ? "/dl/manifest.json" : manifestFrom;
+        try { manifest = JSON.parse(manifestTxt) as ReleaseManifest; } catch { console.error(`REFUSED: ${where} is not JSON. Nothing was installed.`); process.exit(2); }
         const v = verifyManifest(manifest, sigTxt, trustedReleasePubs());
-        if (!v.ok) { console.error(`REFUSED: ${v.reason}. Nothing was installed. Run  can2cup report "release manifest: ${v.reason.slice(0, 60)}"  so the operator hears about it.`); process.exit(2); }
+        if (!v.ok) { console.error(`REFUSED: ${v.reason} (manifest from ${manifestFrom}). Nothing was installed. Run  can2cup report "release manifest: ${v.reason.slice(0, 60)}"  so the operator hears about it.`); process.exit(2); }
         releasePub = v.pub;
-        if (latest && manifest.version !== latest) { console.error(`REFUSED: the signed manifest names ${manifest.version} but /dl/VERSION says ${latest} — staging on the relay is incomplete, or the two files are being swapped separately. Nothing was installed.`); process.exit(2); }
+        if (source === "relay" && latest && manifest.version !== latest) { console.error(`REFUSED: the signed manifest names ${manifest.version} but /dl/VERSION says ${latest} — staging on the relay is incomplete, or the two files are being swapped separately. Nothing was installed.`); process.exit(2); }
+        if (source === "release" && manifest.version !== latest) { console.error(`REFUSED: the signed manifest attached to release v${latest} names ${manifest.version}, not ${latest} (the version from ${versionFrom}) — a manifest of one release cannot vouch for another. Nothing was installed.`); process.exit(2); }
+        console.error(`release manifest: ${manifestFrom} (${source === "relay" ? "served by the relay under /dl" : `the GitHub Release v${latest}; this relay does not mirror /dl`}) — signed by release key ${releasePub.slice(0, 8)}…`);
       }
       // v0.9.11: a release that changes who may do what, or where data goes, says so on a `!!` line. Those lines
       // go in front of the principal BEFORE the install — the agent shows them and comes back with --yes.
       // v0.10.0: the signed manifest carries the same two flags, so a silent changelog cannot hide one.
+      // v0.18.0: a relay without a changelog leaves the manifest flags to decide alone.
       let flags: string[] = [];
-      { const t = await getText("/changelog.txt"); if (t) flags = changelogFlags(t, VERSION, latest || null); }
+      const changelog = await getText("/changelog.txt");
+      if (changelog) flags = changelogFlags(changelog, VERSION, latest || null);
       if (manifest?.permissionChange && !flags.some((f) => /PERMISSION CHANGE/.test(f))) flags.push(`${manifest.version}: !! PERMISSION CHANGE (declared in the signed manifest)`);
       if (manifest?.dataFlowChange && !flags.some((f) => /DATA FLOW/.test(f))) flags.push(`${manifest.version}: !! DATA FLOW (declared in the signed manifest)`);
       if (flags.length && !has("yes")) {
-        console.error(`Between can2cup ${VERSION} and ${latest || "the version the relay serves"}, these releases change who may do what, or where data goes:\n${flags.map((f) => "  " + f).join("\n")}\nShow these lines to your principal (full text: ${DEFAULT_RELAY}/changelog.txt). Run  can2cup upgrade --yes  once they have seen them. Nothing was installed.`);
+        const fullText = changelog ? `${DEFAULT_RELAY}/changelog.txt` : (source === "release" && releasePage(latest)) || manifestFrom;
+        console.error(`Between can2cup ${VERSION} and ${latest || "the version the relay serves"}, these releases change who may do what, or where data goes:\n${flags.map((f) => "  " + f).join("\n")}\nShow these lines to your principal (full text: ${fullText}). Run  can2cup upgrade --yes  once they have seen them. Nothing was installed.`);
         process.exit(3);
       }
       // v0.9.11 (security G-3, P1): download, check the sha256 the relay advertises, THEN hand the file to npm.
       // Same origin as the tarball, so this does not defeat a hostile relay; it catches a swapped or corrupted
       // file, and gives a person a number to compare out of band. --require-checksum refuses a relay without one.
+      // v0.18.0: with the manifest from the release, VERSION.sha256 comes from the same release.
+      const shaFrom = manifest && source === "release" && relBase ? `${relBase}/VERSION.sha256` : `${DEFAULT_RELAY}/dl/VERSION.sha256`;
       let expected = "";
-      try { const r = await fetch(`${DEFAULT_RELAY}/dl/VERSION.sha256`, { signal: AbortSignal.timeout(8000) }); if (r.ok) expected = /^[0-9a-f]{64}/.exec((await r.text()).trim())?.[0] ?? ""; } catch { /* relay predates P1 */ }
-      if (!expected && has("require-checksum")) { console.error("this relay serves no /dl/VERSION.sha256 — refusing (--require-checksum). Nothing was installed."); process.exit(2); }
+      { const r = await fetchText(shaFrom, 8000); if (r.text) expected = /^[0-9a-f]{64}/.exec(r.text.trim())?.[0] ?? ""; }
+      if (!expected && has("require-checksum")) { console.error(`no VERSION.sha256 at ${shaFrom} — refusing (--require-checksum). Nothing was installed.`); process.exit(2); }
       // v0.10.1 (G-3 P3, first half): the bytes come from the npm registry by default — a second, independent host
       // that the relay operator does not control — and still have to match the hash in the maintainer-signed
       // manifest. The relay stays the authority on WHICH version and WHICH hash; npm only stores the bytes.
       // --from-relay downloads from /dl/ instead (mirror / bootstrap for networks where npm is blocked).
       let src = url;
-      if (!has("from-relay") && latest) {
+      if (!fromRelay && latest) {
         try {
-          const meta = await fetch(`https://registry.npmjs.org/can2cup/${latest}`, { signal: AbortSignal.timeout(10000) });
+          const meta = await fetch(`${npmRegistry()}/${PACKAGE_NAME}/${latest}`, { signal: AbortSignal.timeout(10000) });
           if (meta.ok) { const t = ((await meta.json()) as { dist?: { tarball?: string } }).dist?.tarball; if (t) src = t; }
         } catch { /* registry unreachable: fall back to the relay */ }
       }
+      // A relay that does not mirror /dl has no tarball to fall back to: say where the bytes were not found.
+      if (source === "release" && src === url && manifest) { console.error(`could not find ${PACKAGE_NAME}@${latest} on the npm registry (${npmRegistry()}), and this relay does not mirror /dl, so there is nowhere else to take the bytes from. Nothing was installed.`); process.exit(1); }
       console.error(`upgrading can2cup ${VERSION} → ${latest || "?"} from ${src}${src === url ? " (relay)" : " (npm registry)"} …`);
       let buf: Buffer;
       try { const r = await fetch(src, { signal: AbortSignal.timeout(60000) }); if (!r.ok) throw new Error(`HTTP ${r.status}`); buf = Buffer.from(await r.arrayBuffer()); }
-      catch (e) { console.error(`could not download ${src}: ${e instanceof Error ? e.message : e}. Nothing was installed.${src !== url ? " Try  can2cup upgrade --from-relay" : ""}`); process.exit(1); }
+      catch (e) { console.error(`could not download ${src}: ${e instanceof Error ? e.message : e}. Nothing was installed.${src !== url && source === "relay" ? " Try  can2cup upgrade --from-relay" : ""}`); process.exit(1); }
       const actual = createHash("sha256").update(buf).digest("hex");
       // v0.14.5 (seventh opinion #1): the hash of THE release tarball entry, not "any value in the table".
       if (manifest && manifest.files[RELEASE_TARBALL] !== actual) {
-        console.error(`REFUSED: the downloaded tarball's sha256 (${actual.slice(0, 16)}…) is not in the signed manifest for ${manifest.version} — the file the relay serves is not the one the maintainer signed.\nNothing was installed. Run  can2cup report "upgrade tarball not in signed manifest"  so the operator hears about it.`);
+        console.error(`REFUSED: the downloaded tarball's sha256 (${actual.slice(0, 16)}…) is not in the signed manifest for ${manifest.version} — the file ${src === url ? "the relay serves" : "the npm registry serves"} is not the one the maintainer signed.\nNothing was installed. Run  can2cup report "upgrade tarball not in signed manifest"  so the operator hears about it.`);
         process.exit(2);
       }
       if (expected && actual !== expected) {
-        console.error(`REFUSED: the downloaded tarball's sha256 does not match what the relay advertises.\n  expected ${expected}\n  got      ${actual}\nNothing was installed. Run  can2cup report "upgrade sha256 mismatch"  so the operator hears about it.`);
+        console.error(`REFUSED: the downloaded tarball's sha256 does not match ${shaFrom}.\n  expected ${expected}\n  got      ${actual}\nNothing was installed. Run  can2cup report "upgrade sha256 mismatch"  so the operator hears about it.`);
         process.exit(2);
       }
       if (!expected && !manifest) console.error("note: this relay serves no VERSION.sha256 either — installing unverified.");
       if (has("dry-run")) {
-        console.log(`dry run: would install can2cup ${latest || "?"} — sha256 ${actual.slice(0, 16)}… ${manifest ? `signed by release key ${releasePub.slice(0, 8)}… (manifest ${manifest.version}, ${manifest.date})` : "UNSIGNED (--allow-unsigned)"}. Nothing was installed.`);
+        console.log(`dry run: would install can2cup ${latest || "?"} — sha256 ${actual.slice(0, 16)}… ${manifest ? `signed by release key ${releasePub.slice(0, 8)}… (manifest ${manifest.version}, ${manifest.date}, from ${source === "relay" ? "the relay's /dl" : `the GitHub Release v${latest}`})` : "UNSIGNED (--allow-unsigned)"}. Nothing was installed.`);
         return;
       }
       const tmp = path.join(os.tmpdir(), `can2cup-${latest || "latest"}-${randomBytes(4).toString("hex")}.tgz`);
@@ -574,8 +618,8 @@ async function main(): Promise<void> {
       try { fs.unlinkSync(tmp); } catch { /* best effort */ }
       if (rr.status !== 0) { console.error(`npm exited ${rr.status}. If it said EEXIST for an old \`parley\` command: npm rm -g parley, then run can2cup upgrade again.`); process.exit(rr.status ?? 1); }
       const v = run("can2cup", ["--version"], true).stdout?.trim();
-      console.log(`installed: can2cup ${v || "(run can2cup --version)"} (this process was ${VERSION}); sha256 ${actual.slice(0, 16)}… ${manifest ? `signed by release key ${releasePub.slice(0, 8)}…` : expected ? "verified against the relay's VERSION.sha256 (UNSIGNED)" : "UNVERIFIED (relay served no checksum)"}.`);
-      saveInstalled((v || latest || VERSION).replace(/^can2cup\s+/, "").trim(), { sha256: actual, verified: !!expected || !!manifest, ...(manifest ? { manifestSig: sigTxt.slice(0, 16), releasePub: releasePub.slice(0, 8) } : {}) });
+      console.log(`installed: can2cup ${v || "(run can2cup --version)"} (this process was ${VERSION}); sha256 ${actual.slice(0, 16)}… ${manifest ? `signed by release key ${releasePub.slice(0, 8)}… (manifest from ${source === "relay" ? "the relay's /dl" : `the GitHub Release v${latest}`})` : expected ? "verified against the relay's VERSION.sha256 (UNSIGNED)" : "UNVERIFIED (relay served no checksum)"}.`);
+      saveInstalled((v || latest || VERSION).replace(/^can2cup\s+/, "").trim(), { sha256: actual, verified: !!expected || !!manifest, ...(manifest && source ? { manifestSig: sigTxt.slice(0, 16), releasePub: releasePub.slice(0, 8), manifestFrom: source } : {}) });
       const d = loadDuty();
       if (d) console.log(`a can2cup watch (pid ${d.pid}) is on duty with the old code — it notices within a sweep, exits, and asks your session to start it again on the new code.`);
       console.log("Restart Claude Code once so its MCP server loads the new code. Then: can2cup doctor");
@@ -1156,15 +1200,21 @@ async function doctor(): Promise<{ lines: string[]; problems: string[] }> {
   const nodeMajor = Number(process.versions.node.split(".")[0]);
   if (nodeMajor >= 18) ok(`node ${process.versions.node}`); else bad(`node ${process.versions.node} is too old`, "install Node.js 18+ from https://nodejs.org and reinstall can2cup");
   // 2. version vs relay (+ v0.9.11: what the last `can2cup upgrade` installed, and whether its sha256 was verified)
-  { const inst = loadUpgradeNag()?.installed; if (inst?.sha256) ok(`last upgrade installed ${inst.version} from sha256 ${inst.sha256.slice(0, 8)}… (${inst.releasePub ? `signed by release key ${inst.releasePub}…` : inst.verified ? "sha256 matched the relay's VERSION.sha256, but UNSIGNED" : "UNVERIFIED — the relay served no checksum"})`); }
+  { const inst = loadUpgradeNag()?.installed; if (inst?.sha256) ok(`last upgrade installed ${inst.version} from sha256 ${inst.sha256.slice(0, 8)}… (${inst.releasePub ? `signed by release key ${inst.releasePub}…${inst.manifestFrom ? `, manifest from ${inst.manifestFrom === "release" ? "the GitHub Release" : "the relay's /dl"}` : ""}` : inst.verified ? "sha256 matched the relay's VERSION.sha256, but UNSIGNED" : "UNVERIFIED — the relay served no checksum"})`); }
   ok(`trusts release key(s): ${RELEASE_PUBS.map((p) => p.slice(0, 8) + "…").join(", ")}${process.env.CAN2CUP_RELEASE_PUBS ? "  (!! overridden by CAN2CUP_RELEASE_PUBS in this environment)" : ""} — an upgrade must be signed by one of these`);
+  { const o = sourceOverrides(); if (o.length) warn(`upgrade sources overridden by ${o.join(", ")} in this environment`, "dev and smoke only — unset them on a real install (the signature and hash checks still apply)"); }
   let latest = "";
+  let mirrored = false;
   if (DEFAULT_RELAY) {
-    try { const r = await fetch(`${DEFAULT_RELAY}/dl/VERSION`, { signal: AbortSignal.timeout(8000) }); if (r.ok) latest = (await r.text()).trim(); } catch { /* offline */ }
+    try { const r = await fetch(`${DEFAULT_RELAY}/dl/VERSION`, { signal: AbortSignal.timeout(8000) }); if (r.ok) { latest = (await r.text()).trim(); mirrored = !!latest; } } catch { /* offline */ }
+    // v0.18.0: a relay that does not mirror /dl still says its latest client on every signed reply.
+    if (!latest) latest = (await advertisedLatest(DEFAULT_RELAY)) ?? "";
   }
   if (!latest) warn(`can2cup ${VERSION} (relay unreachable, latest unknown)`, `check ${DEFAULT_RELAY || "CAN2CUP_RELAY"} is reachable`);
   else if (latest === VERSION) ok(`can2cup ${VERSION} (latest)`);
-  else warn(`can2cup ${VERSION}, relay serves ${latest}`, `can2cup upgrade   (downloads can2cup@${latest} from the npm registry, checks it against the signed manifest, installs; --from-relay uses ${DEFAULT_RELAY}/dl/can2cup.tgz)`);
+  else warn(`can2cup ${VERSION}, relay serves ${latest}`, mirrored
+    ? `can2cup upgrade   (downloads can2cup@${latest} from the npm registry, checks it against the signed manifest, installs; --from-relay uses ${DEFAULT_RELAY}/dl/can2cup.tgz)`
+    : `can2cup upgrade   (this relay does not mirror /dl: the signed manifest comes from the GitHub Release v${latest}, the bytes from the npm registry, then installs)`);
   // 3. identity / mcp / skill
   const hasId = fs.existsSync(path.join(HOME, "identity.json"));
   if (hasId) ok(`identity ${loadIdentity().name} (${short(loadIdentity().pub)}) in ${HOME}`); else bad("no agent identity", `can2cup setup --relay ${DEFAULT_RELAY || "<relay>"} --name <name>`);
