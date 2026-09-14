@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { newKeypair } from "../dist/protocol/index.js";
 
 export const RELEASE_KEY_DIR = process.env.CAN2CUP_RELEASE_DIR || path.join(os.homedir(), ".can2cup-release");
@@ -18,7 +19,10 @@ export function loadReleaseKey() {
   return JSON.parse(fs.readFileSync(RELEASE_KEY_FILE, "utf8"));
 }
 
-const cmd = process.argv[2];
+// The CLI below runs only when this file is the program: release-sign.mjs imports it, and its own flags (--assets …)
+// must not be read as a release-key command.
+const isMain = !!process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const cmd = isMain ? process.argv[2] : undefined;
 if (cmd === "init") {
   if (fs.existsSync(RELEASE_KEY_FILE)) { console.error(`${RELEASE_KEY_FILE} already exists — not overwriting. Rotate by creating a second key elsewhere (CAN2CUP_RELEASE_DIR).`); process.exit(1); }
   fs.mkdirSync(RELEASE_KEY_DIR, { recursive: true });
