@@ -10,6 +10,15 @@
  *   RELAY=http://127.0.0.1:8787 RELAY_KEY=dev BRIDGE_KEY=devbridge node dist/scripts/smoke.js
  *   (the relay under test must have RELAY_SIGNING_KEY set — .dev.vars for wrangler dev;
  *    also PRESENCE_GRACE_SEC=2 there, or the presence section waits out the 90 s production grace)
+ *
+ *   The write-budget section (2026-09-14) needs nothing extra on the relay: it shortens the presence clock for its own
+ *   agent only, through /bridge/debug/presence-timers, so every other section keeps the production 3-minute clock.
+ *   (PRESENCE_STALE_SEC / SEEN_PERSIST_SEC exist for manual runs — `wrangler dev --var PRESENCE_STALE_SEC:4` — but a
+ *   whole run on a 4-second clock would announce idle agents offline all over the suite.) Every `can2cup watch` this
+ *   suite spawns inherits CAN2CUP_WATCH_MIN_INTERVAL=1, so `--interval 1` is not raised to the 15 s duty minimum.
+ *   The suite drives Alice's key far faster than any agent would (every send and wait reads her inbox), so it lifts
+ *   the relay's /p/inbox token bucket relay-wide at the start (POST /bridge/debug/inbox-bucket) and gives the
+ *   write-budget agents the production numbers (20 back-to-back, one per 6 s) back; it clears the override at the end.
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -28,6 +37,7 @@ const BRIDGE_KEY = process.env.BRIDGE_KEY ?? "devbridge";
 const GRACE_MS = ((Number(process.env.PRESENCE_GRACE_SEC) || 2)) * 1000;
 const bridgeHdr = { "content-type": "application/json", "x-parley-bridge-key": BRIDGE_KEY };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+process.env.CAN2CUP_WATCH_MIN_INTERVAL ??= "1"; // every spawned watch inherits it (see the header)
 
 // Windows/wrangler-dev: after a burst of requests the dev server closes a keep-alive connection that undici
 // has already picked for the next call, and the suite dies with ECONNRESET on a request that is fine when
@@ -105,6 +115,8 @@ const alicePrincipal = { ...newKeypair(), createdAt: new Date().toISOString(), l
 fs.writeFileSync(path.join(aliceHome, "principal.json"), JSON.stringify(alicePrincipal));
 
 const health = await (await fetch(`${RELAY}/`)).json() as { pub?: string };
+const liftBucket = await bridgePost<{ ok?: boolean }>("/bridge/debug/inbox-bucket", { burst: 1_000_000, refillMs: 1 }); // see the header
+if (!liftBucket.ok) { console.error("FAIL: POST /bridge/debug/inbox-bucket did not answer ok — is the relay built from this tree, with DEBUG_ROUTES=1?"); process.exit(1); }
 expect(/^[0-9a-f]{64}$/.test(health.pub ?? ""), "relay advertises its signing key (RELAY_SIGNING_KEY set)");
 
 const alice = await spawn("Alice", aliceHome, true);
@@ -1825,6 +1837,164 @@ if (RELAY2) {
   const badFile = bakFile + ".bad.json"; fs.writeFileSync(badFile, JSON.stringify(damaged));
   const bad = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "restore", badFile], { env: { ...ginaNoKey, PARLEY_HOME: tmpHome("restored2") }, encoding: "utf8" });
   expect(bad.status === 2 && /REFUSED/.test(bad.stderr) && /Nothing was written/.test(bad.stderr), "a backup whose keys do not match is refused before anything is written");
+}
+
+// ---- 2026-09-14: relay write budget — an idle poll writes nothing, a runaway client is paced, and watch copes ----
+// Workers Free allows a DO 100,000 rows written a day; on 2026-09-11..13 our own clients' polling spent it and /p/inbox
+// answered 500 until midnight UTC. Write counts come from GET /bridge/debug/writes (every put / delete / setAlarm).
+{
+  type Writes = { put: number; delete: number; setAlarm: number; total: number; setAlarmRequest: number; setAlarmAlarm: number; forPub: number; keys: Record<string, number>; inboxCalls: number };
+  type Id = { pub: string; priv: string };
+  const cliPath = path.resolve("dist/cli/index.js");
+  const PROD_BUCKET = (pub: string) => ({ pub, burst: 20, refillMs: 6000 });
+  const writes =(pub: string, reset = false) => bridgeGet<Writes>(`/bridge/debug/writes?pub=${pub}${reset ? "&reset=1" : ""}`);
+  const sGet = (p: string, id: Id, ver = pkgVersion) => fetch(`${RELAY}${p}`, { headers: { "x-can2cup-client": ver, ...signRequestHeaders("GET", p.split("?")[0], "", id) } });
+  const sPost = (p: string, body: unknown, id: Id, ver = pkgVersion) => { const raw = JSON.stringify(body); return fetch(`${RELAY}${p}`, { method: "POST", body: raw, headers: { "content-type": "application/json", "x-can2cup-client": ver, ...signRequestHeaders("POST", p, raw, id) } }); };
+  const mkAgent = async (name: string, userId: string) => {
+    const home = tmpHome(name.toLowerCase());
+    const env = { ...process.env, PARLEY_HOME: home, PARLEY_NAME: name, PARLEY_RELAY: RELAY } as Record<string, string>;
+    for (const k of ["CAN2CUP_RELAY_KEY", "CAN2CAN_RELAY_KEY", "PARLEY_RELAY_KEY", "RELAY_KEY"]) delete env[k];
+    const run = (...args: string[]) => spawnSync(process.execPath, [cliPath, ...args], { env, encoding: "utf8", timeout: 90_000 });
+    run("setup", "--client", "json", "--relay", RELAY);
+    const code = (await bridgePost<{ code: string }>("/bridge/link-code", { locale: "zh-TW", userId, ttlSec: 1800 })).code;
+    const linked = run("link", code).status === 0;
+    const id = JSON.parse(fs.readFileSync(path.join(home, "identity.json"), "utf8")) as Id;
+    await bridgePost("/bridge/debug/inbox-bucket", PROD_BUCKET(id.pub)); // this section tests the production bucket
+    return { home, env, run, id, linked };
+  };
+  /** hand out and ack whatever the agent's inbox holds; returns lastSeq */
+  const drain = async (id: Id): Promise<number> => {
+    const r = (await (await sGet("/p/inbox?since=0&instance=smoke", id)).json()) as { lastSeq: number };
+    await (await sPost("/p/ack", { seq: r.lastSeq }, id)).arrayBuffer();
+    return r.lastSeq;
+  };
+
+  // -- an agent that stays online polls for free --
+  const A = await mkAgent("Budget", "Ubudget");
+  expect(A.linked, "write budget: a fresh agent bound a LINE account");
+  let seqA = await drain(A.id);
+  await bridgePost("/bridge/inbox", { userId: "Ubudget", text: "pending one" });
+  const peekA = (await (await sGet(`/p/inbox?since=${seqA}&peek=1&instance=smoke`, A.id)).json()) as { messages: unknown[] };
+  const onPeek = (await (await sPost("/p/online", {}, A.id)).json()) as { pendingInbox: number };
+  expect(peekA.messages.length === 1 && onPeek.pendingInbox === 1, `a peek hands nothing out: /p/online still counts the instruction as pending (${onPeek.pendingInbox})`);
+  const readA = (await (await sGet(`/p/inbox?since=${seqA}&instance=smoke`, A.id)).json()) as { messages: unknown[]; lastSeq: number };
+  const onRead = (await (await sPost("/p/online", {}, A.id)).json()) as { pendingInbox: number };
+  expect(readA.messages.length === 1 && onRead.pendingInbox === 0, `…a delivering read does: pending drops to 0 (${onRead.pendingInbox})`);
+  seqA = readA.lastSeq;
+  await (await sPost("/p/ack", { seq: seqA }, A.id)).arrayBuffer();
+
+  await writes(A.id.pub, true);
+  for (let i = 0; i < 10; i++) await (await sPost("/p/heartbeat", {}, A.id, i % 2 ? pkgVersion : "0.9.1")).arrayBuffer();
+  const wVer = await writes(A.id.pub, true);
+  const verWrites = wVer.keys[`ver:${A.id.pub}`] ?? 0;
+  expect(verWrites <= 1, `two processes on one key alternating client versions 10× write ver: at most once (${verWrites})`);
+
+  await bridgePost("/bridge/debug/inbox-bucket", PROD_BUCKET(A.id.pub)); // a full burst again (the reads above spent some)
+  const statuses: number[] = [];
+  let pa30 = false, pa60 = false;
+  for (let i = 0; i < 40; i++) {
+    if (i % 4 === 3) { await (await sPost("/p/heartbeat", {}, A.id)).arrayBuffer(); continue; }
+    const r = await sGet(`/p/inbox?since=${seqA}&instance=smoke`, A.id);
+    statuses.push(r.status);
+    const pa = r.headers.get("x-can2cup-poll-after");
+    if (r.status === 200 && pa === "30") pa30 = true;
+    if (r.status === 200 && pa === "60") pa60 = true;
+    await r.arrayBuffer();
+  }
+  const wIdle = await writes(A.id.pub, true);
+  expect(statuses.filter((s) => s === 200).length >= 20 && wIdle.forPub <= 1 && wIdle.setAlarmRequest <= 1, `30 empty inbox polls + 10 heartbeats inside the persist interval: ${wIdle.forPub} write(s) for that agent, ${wIdle.setAlarmRequest} alarm(s) armed (was ~3 rows per poll); ${statuses.filter((s) => s === 200).length}/30 polls answered 200 — ${JSON.stringify(wIdle.keys)}`);
+  expect(pa30 && pa60, "an empty inbox answer carries x-can2cup-poll-after: 30, and 60 once that key has been reading hard");
+
+  let first429: Response | null = null;
+  for (let i = 0; i < 25 && !first429; i++) { const r = await sGet(`/p/inbox?since=${seqA}&instance=smoke`, A.id); if (r.status === 429) first429 = r; else await r.arrayBuffer(); }
+  const retryAfter = Number(first429?.headers.get("retry-after"));
+  await first429?.arrayBuffer();
+  expect(!!first429 && retryAfter > 0, `back-to-back inbox reads are refused with 429 + Retry-After (${retryAfter} s) once the key's burst is spent`);
+  await writes(A.id.pub, true);
+  const refused: number[] = [];
+  for (let i = 0; i < 5; i++) { const r = await sGet(`/p/inbox?since=${seqA}&instance=smoke`, A.id); refused.push(r.status); await r.arrayBuffer(); }
+  const w429 = await writes(A.id.pub, true);
+  expect(refused.every((s) => s === 429) && w429.forPub === 0 && w429.inboxCalls === 5, `…and the 429 path writes nothing: ${w429.forPub} write(s) for ${w429.inboxCalls} refused reads (${refused.join(",")})`);
+  const onl = await sPost("/p/online", {}, A.id); await onl.arrayBuffer();
+  const hb = await sPost("/p/heartbeat", {}, A.id); await hb.arrayBuffer();
+  const off = await sPost("/p/offline", {}, A.id); await off.arrayBuffer();
+  expect(onl.status === 200 && hb.status === 200 && off.status === 200, `…while /p/online, /p/heartbeat and /p/offline from that same key still answer (${onl.status}, ${hb.status}, ${off.status})`);
+
+  // -- the presence clock on lazily persisted seen: (this agent only: stale after 4 s, seen: persisted every 1 s) --
+  const S = await mkAgent("Stale", "Ustale");
+  expect(S.linked, "presence: a second fresh agent bound a LINE account");
+  await bridgePost("/bridge/debug/presence-timers", { pub: S.id.pub, staleSec: 4, seenPersistSec: 1 });
+  const seqS = await drain(S.id);
+  const tS = new Date().toISOString();
+  const stalePushes = async () => (await bridgeGet<{ pushes: Array<{ at: string; to: string; kind: string; text: string }> }>("/bridge/debug/pushes")).pushes.filter((x) => x.to === "Ustale" && x.kind.startsWith("presence:") && x.at > tS);
+  for (let i = 0; i < 6; i++) { await (await sGet(`/p/inbox?since=${seqS}&instance=smoke`, S.id)).arrayBuffer(); await sleep(2000); }
+  expect((await stalePushes()).length === 0, "presence clock 4 s: an agent polling every 2 s for 12 s is never announced offline");
+  let offS: Array<{ kind: string }> = [];
+  for (let i = 0; i < 20 && !offS.length; i++) { await sleep(1000); offS = (await stalePushes()).filter((x) => x.kind === "presence:offline"); }
+  await sleep(3000);
+  const offAll = (await stalePushes()).filter((x) => x.kind === "presence:offline");
+  expect(offAll.length === 1, `…stopping without a goodbye is announced exactly once (${offAll.length})`);
+  await bridgePost("/bridge/inbox", { userId: "Ustale", text: "while you were away" });
+  await (await sPost("/p/heartbeat", {}, S.id)).arrayBuffer();
+  let onS: Array<{ text: string }> = [];
+  for (let i = 0; i < 10 && !onS.length; i++) { await sleep(500); onS = (await stalePushes()).filter((x) => x.kind === "presence:online"); }
+  expect(onS.length === 1 && onS[0].text.includes("1 則"), `…and one call brings it back: presence:online with the queued count (${onS[0]?.text ?? "none"})`);
+  await bridgePost("/bridge/debug/presence-timers", { pub: S.id.pub });
+
+  // -- can2cup watch against a relay that is failing --
+  const W = await mkAgent("Watcher", "Uwatcher");
+  expect(W.linked, "watch: a third fresh agent bound a LINE account");
+  await bridgePost("/bridge/inbox", { userId: "Uwatcher", text: "hello watcher" });
+  const wFirst = W.run("watch", "--interval", "1");
+  const wAck = W.run("ack");
+  expect(wFirst.status === 0 && wFirst.stdout.includes("hello watcher") && wAck.status === 0, "watch: the watcher starts clean (its first instruction read and acked)");
+  const wCreate = W.run("create", "--name", "write budget");
+  const wRoom = /room created: ([0-9a-f]{12})/.exec(wCreate.stdout)?.[1];
+  const wLink = /https?:\/\/\S+\/j\/[0-9a-f]{12}\S*/.exec(W.run("invite", wRoom ?? "").stdout)?.[0];
+  expect(!!wRoom && !!wLink, `the watcher opened a room with an invite link (${wRoom})`);
+  await call(bob, "can2cup_join", { invite: wLink! });
+  await call(bob, "can2cup_send", { room: wRoom, type: "text", text: "through the outage" });
+  const wCap = (JSON.parse(fs.readFileSync(path.join(W.home, "rooms.json"), "utf8")) as Record<string, { cap?: string; secret?: string }>)[wRoom!];
+  const roomAuth = { "content-type": "application/json", authorization: `Bearer ${wCap.cap ?? wCap.secret}` };
+  const roomFail = async (n: number, status = 503) => (await fetch(`${RELAY}/rooms/${wRoom}/debug/fail`, { method: "POST", headers: roomAuth, body: JSON.stringify({ n, status }) })).status;
+  expect((await roomFail(10, 503)) === 200, "the room will answer its next 10 polls with 503");
+  await bridgePost("/bridge/debug/inbox-fail", { userId: "Uwatcher", n: 3, status: 503 });
+  const t503 = Date.now();
+  const w503 = W.run("watch", wRoom!, "--interval", "1");
+  expect(w503.status === 0 && w503.stdout.includes("through the outage") && !/muted/.test(w503.stderr) && /not counted toward muting/.test(w503.stderr), `watch: 10 injected 503s do not mute the room — the message behind them still arrives (${Math.round((Date.now() - t503) / 1000)} s)`);
+  expect(/inbox error: relay 503/.test(w503.stderr) && /backing off/.test(w503.stderr), "…a failed inbox read is an error it backs off on, not an empty inbox");
+  const roomStatuses: number[] = [];
+  let roomHint: string | null = null;
+  for (let i = 0; i < 30; i++) { const r = await fetch(`${RELAY}/rooms/${wRoom}/messages?since=100000&wait=0`, { headers: roomAuth }); roomStatuses.push(r.status); roomHint ??= r.headers.get("x-can2cup-poll-after"); await r.arrayBuffer(); }
+  expect(roomStatuses.every((s) => s === 200) && roomHint === "30", `30 back-to-back room polls are never refused, and an empty one says x-can2cup-poll-after: 30 (${roomHint})`);
+
+  // inbox-only duty: an unbound agent holding only that room, which now answers 404 → muted after 10 sweeps
+  const bHome = tmpHome("inboxonly");
+  const bEnv = { ...process.env, PARLEY_HOME: bHome, PARLEY_NAME: "InboxOnly", PARLEY_RELAY: RELAY } as Record<string, string>;
+  spawnSync(process.execPath, [cliPath, "setup", "--client", "json", "--relay", RELAY], { env: bEnv, encoding: "utf8" });
+  fs.copyFileSync(path.join(W.home, "rooms.json"), path.join(bHome, "rooms.json"));
+  const bId = JSON.parse(fs.readFileSync(path.join(bHome, "identity.json"), "utf8")) as Id;
+  await bridgePost("/bridge/debug/inbox-bucket", PROD_BUCKET(bId.pub));
+  await roomFail(1000, 404);
+  await writes(bId.pub, true);
+  const wOnly = spawnSync(process.execPath, [cliPath, "watch", "--interval", "1", "--max-hours", "0.006"], { env: { ...bEnv, CAN2CUP_WATCH_TRACE: "1" }, encoding: "utf8", timeout: 60_000 });
+  const sweepsB = (wOnly.stderr.match(/watch: sweep \d+ done/g) ?? []).length;
+  const wB = await writes(bId.pub, true);
+  await roomFail(0);
+  expect(wOnly.status === 0 && /switching to principal-inbox-only/.test(wOnly.stderr) && /duty ended after 0\.006 h/.test(wOnly.stdout), "watch: a room that keeps answering 404 is muted, duty carries on inbox-only, then stands down at --max-hours");
+  expect(sweepsB > 11 && wB.inboxCalls === sweepsB, `…reading the inbox exactly once per sweep, inbox-only mode included (${wB.inboxCalls} reads, ${sweepsB} sweeps)`);
+
+  // the floor under --interval, and --max-hours, with no test override
+  const cEnv = { ...bEnv, PARLEY_HOME: tmpHome("clamp"), PARLEY_NAME: "Clamp" } as Record<string, string>;
+  delete cEnv.CAN2CUP_WATCH_MIN_INTERVAL;
+  spawnSync(process.execPath, [cliPath, "setup", "--client", "json", "--relay", RELAY], { env: cEnv, encoding: "utf8" });
+  const tC = Date.now();
+  const wClamp = spawnSync(process.execPath, [cliPath, "watch", "--interval", "2", "--max-hours", "0.001"], { env: cEnv, encoding: "utf8", timeout: 30_000 });
+  const tookC = Date.now() - tC;
+  expect(wClamp.status === 0 && /--interval 2 is below the minimum of 15 s/.test(wClamp.stderr), "watch: --interval 2 is raised to the 15 s minimum, and it says so");
+  expect(/=== can2cup watch: duty ended after 0\.001 h with nothing new ===/.test(wClamp.stdout) && /start duty again \(same command\)/.test(wClamp.stdout) && tookC < 14_000, `watch --max-hours 0.001 prints the restart line and exits 0 (${Math.round(tookC / 1000)} s: the 15 s rest is cut to the deadline)`);
+  for (const pub of [A.id.pub, S.id.pub, W.id.pub, bId.pub]) await bridgePost("/bridge/debug/inbox-bucket", { pub });
+  await bridgePost("/bridge/debug/inbox-bucket", {}); // the relay-wide lift set at the top
 }
 
 console.log(`\nALL OK (${n} checks) — room`, roomId, "\n  alice home:", aliceHome, "\n  bob home:  ", bobHome);
