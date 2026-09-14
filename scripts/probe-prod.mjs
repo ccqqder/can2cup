@@ -1,6 +1,7 @@
 // Layer 2 of docs/chat-e2e.md — the PRODUCTION relay, after every deploy, with nobody's phone.
 //
-//   node scripts/probe-prod.mjs [--relay https://can2cup.com] [--skip-loop] [--verbose]      (npm run probe:prod)
+//   node scripts/probe-prod.mjs --relay https://<relay> [--skip-loop] [--verbose] [--cli <dist/cli/index.js>]
+//   npm run probe:prod -- --relay https://<relay>                  (--relay is required: there is no default relay)
 //
 // What it proves, in order:
 //   routes   every chat-app webhook route is up and verifying: an unsigned / wrong-secret POST gets that adapter's own
@@ -21,7 +22,12 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 
 const argv = process.argv.slice(2);
-const RELAY = (argv.includes("--relay") ? argv[argv.indexOf("--relay") + 1] : "https://can2cup.com").replace(/\/+$/, "");
+const relayArg = argv.includes("--relay") ? argv[argv.indexOf("--relay") + 1] : undefined;
+if (!relayArg || !/^https?:\/\//.test(relayArg)) {
+  console.error("usage: node scripts/probe-prod.mjs --relay https://<relay> [--skip-loop] [--verbose] [--cli <dist/cli/index.js>]\n--relay is required: the deployed relay to probe");
+  process.exit(2);
+}
+const RELAY = relayArg.replace(/\/+$/, "");
 const VERBOSE = argv.includes("--verbose");
 const SKIP_LOOP = argv.includes("--skip-loop");
 const LOOP_TIMEOUT_MS = 90_000;
@@ -136,7 +142,8 @@ else {
       let seen = false, out = "";
       while (!seen && Date.now() - started < LOOP_TIMEOUT_MS) {
         out = await new Promise((resolve) => {
-          const p = spawn(process.execPath, [CLI, "watch", "--interval", "2"], { stdio: ["ignore", "pipe", "pipe"] });
+          // the client clamps --interval to a floor; the probe wants its 2 s sweep, so it lowers the floor for this child only
+          const p = spawn(process.execPath, [CLI, "watch", "--interval", "2"], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CAN2CUP_WATCH_MIN_INTERVAL: "2" } });
           let buf = "";
           p.stdout.on("data", (d) => { buf += d; });
           p.stderr.on("data", (d) => { if (VERBOSE) process.stderr.write(d); });

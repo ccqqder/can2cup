@@ -75,8 +75,8 @@ Needs (`CAN2CUP_ENV_DIR` says which directory holds these; unset, they are looke
 client is a version whose `can2cup whoami` prints the channel health line).
 
 ```
-npm run probe:prod                                  # ~10 s; two lines arrive on the principal's phone
-node scripts/probe-prod.mjs --skip-loop             # routes + secrets + token only, nothing reaches the phone
+npm run probe:prod -- --relay https://<relay>                   # ~10 s; two lines arrive on the principal's phone
+node scripts/probe-prod.mjs --relay https://<relay> --skip-loop  # routes + secrets + token only, nothing reaches the phone
 ```
 
 ## Layer 3 — real devices, only at the adapter boundary

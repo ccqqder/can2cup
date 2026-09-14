@@ -1,23 +1,29 @@
 // v0.12.1 — configure the Discord app from here instead of clicking through the Developer Portal.
 //   node scripts/discord-app.mjs show                    what Discord currently holds for the app
-//   node scripts/discord-app.mjs app [--relay URL]       interactions endpoint, install contexts, description, ToS/privacy
+//   node scripts/discord-app.mjs app --relay https://<relay>   interactions endpoint, install contexts, description, ToS/privacy
 //   node scripts/discord-app.mjs commands                 (re)register the global slash commands — the console's command set
 // Reads DISCORD_APPLICATION_ID / DISCORD_BOT_TOKEN from .env.discord — never in this repo. CAN2CUP_ENV_DIR names
 // the directory that holds it; DISCORD_ENV_FILE overrides the whole path.
 // `app` makes Discord validate the endpoint on the spot (a PING and a bad-signature probe), so deploy the Worker with
-// DISCORD_PUBLIC_KEY first.
+// DISCORD_PUBLIC_KEY first. `app` has no default relay: --relay is the deployment the app is pointed at.
 import fs from "node:fs";
+
+const args = process.argv.slice(2);
+const what = args[0] ?? "show";
+const relayArg = args.includes("--relay") ? args[args.indexOf("--relay") + 1] : undefined;
+if (what === "app" && (!relayArg || !/^https?:\/\//.test(relayArg))) { console.error("usage: node scripts/discord-app.mjs app --relay https://<relay>\n--relay is required: the relay whose /discord/interactions the app should call"); process.exit(2); }
+const relay = (relayArg ?? "").replace(/\/+$/, "");
+const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const repoUrl = ((typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url) ?? "").replace(/^git\+/, "").replace(/\.git$/, "");
 
 const envFile = process.env.DISCORD_ENV_FILE ?? `${(process.env.CAN2CUP_ENV_DIR ?? ".").replace(/[\\/]+$/, "")}/.env.discord`;
 const env = Object.fromEntries(fs.readFileSync(envFile, "utf8").split("\n").filter((l) => /^[A-Z_]+=/.test(l)).map((l) => { const i = l.indexOf("="); return [l.slice(0, i), l.slice(i + 1).trim()]; }));
 const APP = env.DISCORD_APPLICATION_ID, TOKEN = env.DISCORD_BOT_TOKEN;
 if (!APP || !TOKEN) { console.error(`${envFile}: DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN required`); process.exit(2); }
-const args = process.argv.slice(2);
-const what = args[0] ?? "show";
-const relay = (args.includes("--relay") ? args[args.indexOf("--relay") + 1] : "https://can2cup.com").replace(/\/+$/, "");
 
 async function api(path, body, method = body ? "PATCH" : "GET") {
-  const r = await fetch(`https://discord.com/api/v10${path}`, { method, headers: { authorization: `Bot ${TOKEN}`, "content-type": "application/json", "user-agent": "DiscordBot (https://can2cup.com, 0.12.1)" }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  // Discord's required form: "DiscordBot ($url, $versionNumber)"
+  const r = await fetch(`https://discord.com/api/v10${path}`, { method, headers: { authorization: `Bot ${TOKEN}`, "content-type": "application/json", "user-agent": `DiscordBot (${repoUrl}, ${pkg.version})` }, ...(body ? { body: JSON.stringify(body) } : {}) });
   const text = await r.text();
   let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
   if (!r.ok) { console.error(`${method} ${path} → ${r.status}\n${JSON.stringify(json, null, 2)}`); process.exit(1); }
@@ -63,4 +69,4 @@ install (into a server):    https://discord.com/oauth2/authorize?client_id=${APP
 } else if (what === "commands") {
   const out = await api(`/applications/${APP}/commands`, COMMANDS, "PUT");
   console.log(`ok: ${out.length} global commands registered: ${out.map((c) => "/" + c.name).join(" ")}`);
-} else { console.error("usage: node scripts/discord-app.mjs show | app [--relay URL] | commands"); process.exit(2); }
+} else { console.error("usage: node scripts/discord-app.mjs show | app --relay https://<relay> | commands"); process.exit(2); }

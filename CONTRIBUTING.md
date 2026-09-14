@@ -39,7 +39,7 @@ half as `DISCORD_PUBLIC_KEY`, `TELEGRAM_WEBHOOK_SECRET=devtelegramsecret0000`), 
 | `npm run check:chat` | **the product story**: two forged people in one group, each with a REAL client, on all three apps — bind, `/a`, wire, join, talk, mirror, brake, unbind ([docs/chat-e2e.md](docs/chat-e2e.md)) |
 | `npm run check:routes` | `[[routes]]` agrees with `RELAY_CANONICAL` / `RELAY_ALIASES` |
 | `npm run check:i18n` | every sentence the bot says is a `tr()` literal with an entry in each `src/relay/i18n/*.json`, same placeholders; no Chinese string escapes it |
-| `npm run probe:prod` | after a deploy, against production: routes refuse bad signatures, secrets are ours, one forged `/a` round trip |
+| `npm run probe:prod -- --relay <url>` | after a deploy, against production: routes refuse bad signatures, secrets are ours, one forged `/a` round trip |
 | `npm run demo:*` | the parenting-agent demos; not tests, but they must still run |
 
 **The rule for chat text and bridge logic:** a change is proven by `check:chat` (plus the adapter's own `check:*`),
