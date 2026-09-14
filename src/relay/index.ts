@@ -530,6 +530,11 @@ export class RoomDO extends DurableObject<Env> {
     });
 
     app.get("/rooms/:id/messages", async (c) => {
+      // 2026-09-14 (smoke): let the suite make the next n polls of this room fail with a chosen status.
+      if (this.env.DEBUG_ROUTES === "1") {
+        const f = await this.ctx.storage.get<{ n: number; status: number }>("debug:fail");
+        if (f && f.n > 0) { await this.ctx.storage.put("debug:fail", { n: f.n - 1, status: f.status }); return c.json({ error: "debug: room unavailable" }, f.status as 503); }
+      }
       const since = Math.max(0, Number(c.req.query("since") ?? 0) || 0);
       const wait = Math.min(50, Math.max(0, Number(c.req.query("wait") ?? 0) || 0));
       let msgs = await this.since(since);
@@ -546,6 +551,9 @@ export class RoomDO extends DurableObject<Env> {
       // v0.11.2 (smoke, fourth opinion #10): serve only a PREFIX while every number and the signed head stay truthful.
       const upto = this.env.DEBUG_ROUTES === "1" ? await this.ctx.storage.get<number>("debug:serveUpto") : undefined;
       if (typeof upto === "number") msgs = msgs.filter((m) => m.seq <= upto);
+      // 2026-09-14: an empty zero-wait poll says how long to leave it. A hint only — room polls are never refused
+      // (they write nothing, and a 429 here would read to a client like a room it lost).
+      if (msgs.length === 0 && wait === 0) c.header("x-can2cup-poll-after", "30");
       return c.json({ messages: msgs, lastSeq: last.seq, lastHash: last.hash, state: meta.state, head: this.head(meta.id, fork ? { ...last, hash: fork } : last), relayPub: relayPub(this.env) });
     });
 
@@ -559,6 +567,14 @@ export class RoomDO extends DurableObject<Env> {
       if (!e || !p.body) return c.json({ error: "seq and body required" }, 400);
       await this.ctx.storage.put(seqKey(p.seq!), { ...e, body: p.body }); // hash and sig left as they were
       return c.json({ ok: true, seq: p.seq });
+    });
+    app.post("/rooms/:id/debug/fail", async (c) => {
+      const p = (await c.req.json().catch(() => ({}))) as { n?: number; status?: number };
+      const n = Math.max(0, Number(p.n ?? 1) || 0);
+      if (!n) { await this.ctx.storage.delete("debug:fail"); return c.json({ ok: true, n: 0 }); }
+      const status = Number(p.status) >= 400 && Number(p.status) <= 599 ? Number(p.status) : 503;
+      await this.ctx.storage.put("debug:fail", { n, status });
+      return c.json({ ok: true, n, status });
     });
     app.post("/rooms/:id/debug/serve-upto", async (c) => {
       const p = (await c.req.json().catch(() => ({}))) as { upto?: number | null };

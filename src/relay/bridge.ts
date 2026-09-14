@@ -73,6 +73,8 @@ export interface BridgeEnv {
   PUSH_BUDGET?: string; // per month; default 180 (LINE free plan is 200)
   LINE_OA_ID?: string;  // "@xxxx" — the bot's public basic ID, for line.me deep links
   PRESENCE_GRACE_SEC?: string; // hold an MCP's goodbye this long before telling the principal; default 90
+  PRESENCE_STALE_SEC?: string; // dev only: no /p/* call for this long = offline; default 180
+  SEEN_PERSIST_SEC?: string;   // dev only: persist seen:<pub> at most this often; default 45 (keep persist + 120 s heartbeat < stale)
   OPERATOR_LINE_USER_ID?: string; // v0.8.1: where `can2cup report` lands (the person who runs this relay)
   INBOX_LEASE_SEC?: string;      // v0.8.0: override the 15-min unanswered lease (dev/smoke only)
   PUSH_USER_BUDGET?: string;   // monthly pushes per target (user or group); default 60 — one noisy stranger must not drain the shared LINE budget
@@ -167,7 +169,25 @@ const ROOMREQ_TTL_MS = 60 * 60 * 1000; // a /room request waits this long for th
 const ROOM_HOURLY_PUSHES = 40; // one room's share of the shared push budget per hour
 const CODE_MISS_PER_HOUR = 10;  // v0.10.3: wrong /link, /setup or /join codes one caller may try per hour before 429
 const INVITE_MINT_PER_DAY = 50; // v0.14.3: short invite codes one agent (pub) may mint per day — an anti-amplifier cap; normal use is a handful
-const PRESENCE_STALE_MS = 3 * 60 * 1000; // no /p/* call (heartbeat is every 60 s) for this long = offline
+const PRESENCE_STALE_MS = 3 * 60 * 1000; // no /p/* call (heartbeat is every 120 s) for this long = offline
+// ---- write budget (2026-09-14) -------------------------------------------------------------------------------------
+// Workers Free: a SQLite DO may write 100,000 rows a day (put, delete and setAlarm each count; past it every write
+// throws until 00:00 UTC). On 2026-09-11..13 our own clients' polling spent it daily — every empty /p/inbox wrote ~3
+// rows — and /p/inbox + /p/heartbeat answered 500 until midnight. The rule since: an idle poll writes nothing, and the
+// server's cost is bounded however badly a client behaves. The in-memory state below is only a supplement: DO instances
+// are evicted after ~70-140 s idle and on every deploy, so each decision to SKIP a write must be safe with empty maps.
+/** seen:<pub> is persisted at most this often while an agent stays online (presence also reads the in-memory lastCall).
+ *  INVARIANT: SEEN_PERSIST_MS + the MCP heartbeat (120 s, src/mcp/index.ts) + jitter must stay < PRESENCE_STALE_MS
+ *  (180 s). After an eviction only the stored seen: is left, and it may lag the real last call by up to this interval —
+ *  if lag + the next heartbeat's gap could reach the stale limit, a live agent would be announced "offline". */
+const SEEN_PERSIST_MS = 45_000;
+const UNBOUND_SEEN_PERSIST_MS = 3_600_000; // keys with no binding and no hosted: key — nobody is told about their presence
+const META_PERSIST_MS = 600_000;           // ver:/host: rewrite at most this often per key (two processes on one key may disagree)
+const INBOX_BUCKET = { burst: 20, refillMs: 6000 }; // per pub, in memory: 20 back-to-back reads, then one per 6 s
+const BOOKKEEPING_WRITES_PER_HOUR = 1500;  // global cap on presence/version bookkeeping writes; spent → skip them (log once an hour)
+const POLL_AFTER_SEC = 30;                 // x-can2cup-poll-after on an empty inbox / room poll
+const POLL_AFTER_SLOW_SEC = 60;            // …when that key's inbox bucket is below half
+const MAP_MAX = 10_000;                    // in-memory maps drop their oldest entries past this
 const PUSH_MAX_ATTEMPTS = 6;                 // review R2: ~30s,1m,2m,4m,8m,16m of backoff before a push is given up
 const REPORT_TTL_MS = 30 * 24 * 3600 * 1000; // review R4: what /privacy promises
 const REPORT_PUSHES_PER_DAY = 20;            // review R4: reports must never eat the user-facing push budget
@@ -188,7 +208,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
 
   constructor(ctx: DurableObjectState, env: BridgeEnv) {
     super(ctx, env);
-    const store = { get: <T,>(k: string) => this.get<T>(k), put: (k: string, v: unknown) => this.put(k, v), del: (k: string) => this.ctx.storage.delete(k).then(() => undefined) };
+    const store = { get: <T,>(k: string) => this.get<T>(k), put: (k: string, v: unknown) => this.put(k, v), del: (k: string) => this.del(k).then(() => undefined) };
     this.channels = makeChannels(env, store);
     this.routes();
   }
@@ -203,7 +223,86 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
   // ------------------------------------------------------------ helpers ---
 
   private get<T>(k: string): Promise<T | undefined> { return this.ctx.storage.get<T>(k); }
-  private put(k: string, v: unknown): Promise<void> { return this.ctx.storage.put(k, v); }
+  // Every write in this DO goes through put / del / setAlarmAt, so the debug counter (DEBUG_ROUTES=1) sees all of them.
+  private put(k: string, v: unknown): Promise<void> { this.countWrite("put", k); return this.ctx.storage.put(k, v); }
+  private del(k: string): Promise<boolean> { this.countWrite("delete", k); return this.ctx.storage.delete(k); }
+  private setAlarmAt(at: number): Promise<void> { this.countWrite("setAlarm", this.inAlarm > 0 ? "(alarm)" : "(request)"); return this.ctx.storage.setAlarm(at); }
+
+  // ---- write budget: in-memory supplements (see SEEN_PERSIST_MS). Lost on eviction; nothing below may depend on them.
+  private lastCall = new Map<string, number>();                     // pub → ms of its last presence-touching /p/* call
+  private metaWritten = new Map<string, number>();                  // "ver:<pub>" / "host:<pub>" → ms we last wrote it
+  private buckets = new Map<string, { tokens: number; at: number }>(); // pub → /p/inbox token bucket
+  private bookkeeping = { hour: -1, n: 0, warned: false, failWarned: false };
+  private inAlarm = 0;
+  /** A bounded map set: re-inserting moves the key to the newest end, so the oldest entries go first. */
+  private static remember<V>(m: Map<string, V>, k: string, v: V): void {
+    m.delete(k); m.set(k, v);
+    while (m.size > MAP_MAX) { const first = m.keys().next().value; if (first === undefined) break; m.delete(first); }
+  }
+  private staleMs(pub?: string): number {
+    const d = pub && this.env.DEBUG_ROUTES === "1" ? this.debugTimers.get(pub)?.staleMs : undefined;
+    if (d) return d;
+    const s = Number(this.env.PRESENCE_STALE_SEC);
+    return s > 0 ? s * 1000 : PRESENCE_STALE_MS;
+  }
+  private seenPersistMs(pub?: string): number {
+    const d = pub && this.env.DEBUG_ROUTES === "1" ? this.debugTimers.get(pub)?.persistMs : undefined;
+    if (d) return d;
+    const s = Number(this.env.SEEN_PERSIST_SEC);
+    return s > 0 ? s * 1000 : SEEN_PERSIST_MS;
+  }
+  /** One bookkeeping write allowed under the global hourly cap? Spent → false, and one console.error per hour. */
+  private bookkeepingAllowed(): boolean {
+    const hour = Math.floor(Date.now() / 3_600_000);
+    if (hour !== this.bookkeeping.hour) this.bookkeeping = { hour, n: 0, warned: false, failWarned: false };
+    if (this.bookkeeping.n >= BOOKKEEPING_WRITES_PER_HOUR) {
+      if (!this.bookkeeping.warned) { this.bookkeeping.warned = true; console.error(`bridge: ${BOOKKEEPING_WRITES_PER_HOUR} presence/version bookkeeping writes spent this hour — skipping them until the hour turns`); }
+      return false;
+    }
+    this.bookkeeping.n++;
+    return true;
+  }
+  /** A bookkeeping write (seen / stale / host / ver / read): never allowed to fail the request it rides on. A write
+   *  that throws (the daily row cap) is logged once an hour and swallowed. `budget: false` skips the hourly cap. */
+  private async bookkeep(write: () => Promise<unknown>, opts: { budget?: boolean } = {}): Promise<boolean> {
+    if (opts.budget !== false && !this.bookkeepingAllowed()) return false;
+    try { await write(); return true; }
+    catch (e) {
+      if (!this.bookkeeping.failWarned) { this.bookkeeping.failWarned = true; console.error(`bridge: a bookkeeping write failed (${e instanceof Error ? e.message : String(e)}) — the request goes on without it`); }
+      return false;
+    }
+  }
+  /** /p/inbox token bucket, entirely in memory (no storage access on the 429 path). */
+  private takeInboxToken(pub: string): { ok: true } | { ok: false; retryAfterSec: number } {
+    const now = Date.now();
+    const spec = this.bucketSpec(pub);
+    const b = this.buckets.get(pub) ?? { tokens: spec.burst, at: now };
+    b.tokens = Math.min(spec.burst, b.tokens + (now - b.at) / spec.refillMs);
+    b.at = now;
+    BridgeDO.remember(this.buckets, pub, b);
+    if (b.tokens < 1) return { ok: false, retryAfterSec: Math.max(1, Math.ceil(((1 - b.tokens) * spec.refillMs) / 1000)) };
+    b.tokens -= 1;
+    return { ok: true };
+  }
+
+  // ---- debug-only (DEBUG_ROUTES=1): a write counter and per-agent presence timers, for the smoke suite ----
+  private debugWrites = { put: 0, delete: 0, setAlarm: 0, keys: new Map<string, number>() };
+  private debugInboxCalls = new Map<string, number>();
+  private debugTimers = new Map<string, { staleMs?: number; persistMs?: number }>();
+  /** The smoke suite drives single keys far faster than any agent; it lifts the inbox bucket relay-wide (stored, so a
+   *  restarted instance still has it) and puts the production numbers back on the keys whose tests are about the bucket. */
+  private debugBucket: { burst: number; refillMs: number } | null | undefined; // undefined = not loaded in this instance
+  private debugBucketFor = new Map<string, { burst: number; refillMs: number }>();
+  private bucketSpec(pub: string): { burst: number; refillMs: number } {
+    if (this.env.DEBUG_ROUTES !== "1") return INBOX_BUCKET;
+    return this.debugBucketFor.get(pub) ?? this.debugBucket ?? INBOX_BUCKET;
+  }
+  private countWrite(op: "put" | "delete" | "setAlarm", key: string): void {
+    if (this.env.DEBUG_ROUTES !== "1") return;
+    this.debugWrites[op]++;
+    const k = op === "setAlarm" ? `setAlarm${key}` : key;
+    BridgeDO.remember(this.debugWrites.keys, k, (this.debugWrites.keys.get(k) ?? 0) + 1);
+  }
 
   private async bindingByPub(pub: string): Promise<Binding | undefined> { return this.get<Binding>(`pub:${pub}`); }
   private async bindingByUser(userId: string): Promise<Binding | undefined> { return this.get<Binding>(`user:${userId}`); }
@@ -218,7 +317,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     return {
       get: (k) => this.get(k),
       put: (k, v) => this.put(k, v),
-      del: (k) => this.ctx.storage.delete(k).then(() => undefined),
+      del: (k) => this.del(k).then(() => undefined),
       bindingByUser: (u) => this.bindingByUser(u),
       bindingByPub: (p) => this.bindingByPub(p),
       roomsFor: async (p) => (await this.get<Record<string, RoomKnown>>(`rooms:${p}`)) ?? {},
@@ -228,6 +327,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
         return items.filter((i) => !lastRead || i.at > lastRead).length;
       },
       awayAt: (p) => this.get<string>(`offline:${p}`),
+      noteCall: (p) => BridgeDO.remember(this.lastCall, p, Date.now()),
       isPaused: async (p) => (await this.get<boolean>(`paused:${p}`)) ?? false,
       provenPrincipal: (p) => this.provenPrincipal(p),
       dashboardFor: async (p, o) => { const limited = await this.dashboardRateLimited(p); if (limited) throw new Error(limited); return this.dashboardFor(p, o); },
@@ -241,9 +341,9 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       // Same both-directions replacement as /bridge/link: one user ↔ one agent.
       bind: async (userId, pub, name) => {
         const prevByUser = await this.bindingByUser(userId);
-        if (prevByUser) await this.ctx.storage.delete(`pub:${prevByUser.pub}`);
+        if (prevByUser) await this.del(`pub:${prevByUser.pub}`);
         const prevByPub = await this.bindingByPub(pub);
-        if (prevByPub) await this.ctx.storage.delete(`user:${prevByPub.userId}`);
+        if (prevByPub) await this.del(`user:${prevByPub.userId}`);
         const b: Binding = { pub, name, userId, agentMode: false, boundAt: new Date().toISOString() };
         await this.put(`user:${userId}`, b);
         await this.put(`pub:${pub}`, b);
@@ -260,16 +360,18 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
 
   // ---- presence --------------------------------------------------------------------------
   private async presence(pub: string): Promise<{ online: boolean; lastSeen: string | null; lastRead: string | null; offlineAt: string | null; sinceMin: number | null }> {
-    const lastSeen = (await this.get<string>(`seen:${pub}`)) ?? null;
+    // 2026-09-14: seen: is persisted lazily (SEEN_PERSIST_MS); the in-memory last call fills the gap while this instance lives.
+    const storedSeen = await this.get<string>(`seen:${pub}`);
+    const seenMs = Math.max(storedSeen ? Date.parse(storedSeen) || 0 : 0, this.lastCall.get(pub) ?? 0);
+    const lastSeen = seenMs ? new Date(seenMs).toISOString() : null;
     const lastRead = (await this.get<string>(`read:${pub}`)) ?? null;
     const offlineAt = (await this.get<string>(`offline:${pub}`)) ?? null;
-    const seenMs = lastSeen ? Date.parse(lastSeen) : 0;
     // A goodbye inside its grace is not yet an absence: it may be one of several sessions closing,
     // and the next heartbeat (<= 60 s) would take it back. Report "still here" until the grace runs
     // out — otherwise the bot tells the principal "away" for a minute and then has to take it back.
     const pend = await this.get<OffPend>(`offpend:${pub}`);
     const held = !!pend && Date.now() < pend.due;
-    const online = !!lastSeen && (held || !(offlineAt && Date.parse(offlineAt) >= seenMs)) && Date.now() - seenMs < PRESENCE_STALE_MS;
+    const online = !!lastSeen && (held || !(offlineAt && Date.parse(offlineAt) >= seenMs)) && Date.now() - seenMs < this.staleMs(pub);
     const sinceMin = online ? null : seenMs ? Math.max(0, Math.round((Date.now() - seenMs) / 60000)) : null;
     return { online, lastSeen, lastRead, offlineAt, sinceMin };
   }
@@ -348,7 +450,10 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     const pol = await this.get<IdlePolicy>(`idle:${pub}`);
     const forever = pol?.days === 0;
     const ttlMs = pol && pol.days > 0 ? pol.days * this.idleUnitMs() : spec.ttlMs;
-    const lastSeen = (await this.get<string>(`seen:${pub}`)) ?? null;
+    // 2026-09-14: seen: is persisted lazily; this instance's last call (local agent or hosted connector) counts too.
+    const storedSeen = (await this.get<string>(`seen:${pub}`)) ?? null;
+    const seenMs = Math.max(storedSeen ? Date.parse(storedSeen) || 0 : 0, this.lastCall.get(pub) ?? 0);
+    const lastSeen = seenMs ? new Date(seenMs).toISOString() : null;
     const base = Date.parse(lastSeen ?? b.boundAt ?? "") || Date.now();
     const idleMs = Date.now() - base;
     return { days: forever ? 0 : Math.round(ttlMs / this.idleUnitMs()), forever, by: pol?.by ?? null, lastSeen, idleMs, ttlMs, expiresAt: forever ? null : new Date(base + ttlMs).toISOString() };
@@ -366,13 +471,13 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     catch { /* best effort */ }
   }
   private async unwireGroup(gid: string, m: Mirror): Promise<void> {
-    await this.ctx.storage.delete(`mirror:${gid}`);
-    await this.ctx.storage.delete(`ctx:${gid}`);
-    await this.ctx.storage.delete(`glog:${gid}`);
-    await this.ctx.storage.delete(`quiet:${gid}`);
-    await this.ctx.storage.delete(`mirrorwarn:${gid}`);
+    await this.del(`mirror:${gid}`);
+    await this.del(`ctx:${gid}`);
+    await this.del(`glog:${gid}`);
+    await this.del(`quiet:${gid}`);
+    await this.del(`mirrorwarn:${gid}`);
     const list = ((await this.get<string[]>(`mirrors:${m.room}`)) ?? []).filter((g) => g !== gid);
-    if (list.length) await this.put(`mirrors:${m.room}`, list); else await this.ctx.storage.delete(`mirrors:${m.room}`);
+    if (list.length) await this.put(`mirrors:${m.room}`, list); else await this.del(`mirrors:${m.room}`);
   }
   /** One pass over bindings and group wires. `only` narrows it to one pub / one group (smoke uses that so the
    *  other agents in the run are never touched). Returns what it did. */
@@ -393,7 +498,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       const L = await this.placeLang(b.userId); // read before erase() takes the binding away
       if (st.idleMs >= st.ttlMs && graceOver) {
         await this.erase(pub, "binding", { keepSigned: true });
-        await this.ctx.storage.delete(`idlewarn:${pub}`);
+        await this.del(`idlewarn:${pub}`);
         await this.push(b.userId, "idle:expired", tr(L, "已自動解除跟「{name}」的綁定：那台電腦上的 agent 已經 {idle} 沒出現。電腦上的檔案還在；要重接就打 /setup。你簽過的煞車和金鑰登記都沒有動。", { name, idle: this.fmtIdle(st.idleMs, L) }));
         out.expired.push(pub);
         continue;
@@ -405,7 +510,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
         await this.push(b.userId, "idle:warn", tr(L, "你的 agent「{name}」已經 {idle} 沒出現。再 {left} 這個綁定會自動解除；它只要開一次（Claude Code 打開）就會續。要一直留著就打 /keep 永久。", { name, idle: this.fmtIdle(st.idleMs, L), left: this.fmtIdle(leftMs, L) }));
         await this.appendInbox(pub, { at: new Date().toISOString(), via: "relay", text: `BINDING EXPIRES in ${this.fmtIdle(leftMs, "en")} — this agent has not been seen for ${this.fmtIdle(st.idleMs, "en")}. Any signed call renews it; reading this is one. Nothing else to do.` });
         out.warned.push(pub);
-      } else if (await this.get(`idlewarn:${pub}`)) await this.ctx.storage.delete(`idlewarn:${pub}`); // renewed after a warning
+      } else if (await this.get(`idlewarn:${pub}`)) await this.del(`idlewarn:${pub}`); // renewed after a warning
     }
     // group wires follow their room: dead room → wire goes, group is told; T-3 d → group is warned once
     const wires: Array<[string, Mirror]> = only.pub && !only.gid ? []
@@ -429,7 +534,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
         await this.put(`mirrorwarn:${gid}`, new Date().toISOString());
         await this.push(gid, "group:warn", tr(GL, "這個群跟 agent 的對話已經很久沒動了，再 {left} 會自動斷開。任何人打 /a 說一句、或 agent 在這裡講話，就會續。", { left: this.fmtIdle(left, GL) }));
         out.groupsWarned.push(gid);
-      } else if (await this.get(`mirrorwarn:${gid}`)) await this.ctx.storage.delete(`mirrorwarn:${gid}`);
+      } else if (await this.get(`mirrorwarn:${gid}`)) await this.del(`mirrorwarn:${gid}`);
     }
     return out;
   }
@@ -456,12 +561,12 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
 
   private async purgeExpired(): Promise<void> {
     const now = Date.now();
-    for (const [k, v] of await this.ctx.storage.list<{ at: string }>({ prefix: "report:" })) if (now - Date.parse(v.at) > REPORT_TTL_MS) await this.ctx.storage.delete(k);
-    for (const [k, v] of await this.ctx.storage.list<StoredInvite>({ prefix: "inv:" })) if (now - v.at > INVITE_TTL_MS) await this.ctx.storage.delete(k);
-    for (const [k, v] of await this.ctx.storage.list<{ at: number }>({ prefix: "evt:" })) if (now - v.at > 24 * 3600 * 1000) await this.ctx.storage.delete(k);
+    for (const [k, v] of await this.ctx.storage.list<{ at: string }>({ prefix: "report:" })) if (now - Date.parse(v.at) > REPORT_TTL_MS) await this.del(k);
+    for (const [k, v] of await this.ctx.storage.list<StoredInvite>({ prefix: "inv:" })) if (now - v.at > INVITE_TTL_MS) await this.del(k);
+    for (const [k, v] of await this.ctx.storage.list<{ at: number }>({ prefix: "evt:" })) if (now - v.at > 24 * 3600 * 1000) await this.del(k);
     // v0.16.0: a link code that was never redeemed used to stay forever (only redemption deleted it)
-    for (const [k, v] of await this.ctx.storage.list<{ at: number; ttlMs?: number }>({ prefix: "code:" })) if (now - v.at > (v.ttlMs ?? CODE_TTL_MS) + 3600_000) await this.ctx.storage.delete(k);
-    for (const [k, v] of await this.ctx.storage.list<{ at: number; ttlMs?: number }>({ prefix: "pcode:" })) if (now - v.at > (v.ttlMs ?? CODE_TTL_MS) + 3600_000) await this.ctx.storage.delete(k);
+    for (const [k, v] of await this.ctx.storage.list<{ at: number; ttlMs?: number }>({ prefix: "code:" })) if (now - v.at > (v.ttlMs ?? CODE_TTL_MS) + 3600_000) await this.del(k);
+    for (const [k, v] of await this.ctx.storage.list<{ at: number; ttlMs?: number }>({ prefix: "pcode:" })) if (now - v.at > (v.ttlMs ?? CODE_TTL_MS) + 3600_000) await this.del(k);
     await this.purgeCounters(now);
   }
   /** v0.16.0 (pre-release review): every rate / quota counter is keyed by a time bucket — an ISO hour (q:code, q:guest,
@@ -486,7 +591,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       for (const k of (await this.ctx.storage.list({ prefix })).keys()) {
         const bucket = k.slice(k.lastIndexOf(":") + 1);
         const age = ageOf(bucket);
-        if (age != null && !keep(bucket, age)) await this.ctx.storage.delete(k);
+        if (age != null && !keep(bucket, age)) await this.del(k);
       }
     }
   }
@@ -667,7 +772,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     const tally = (k: string) => { const g = k.split(":")[0]; gone[g] = (gone[g] ?? 0) + 1; };
     const drop = async (k: string) => {
       if ((await this.ctx.storage.get(k)) === undefined) return;
-      await this.ctx.storage.delete(k);
+      await this.del(k);
       tally(k);
     };
     const dropPrefix = async (p: string) => { for (const k of (await this.ctx.storage.list({ prefix: p })).keys()) await drop(k); };
@@ -701,6 +806,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
                      `lastGroup:${pub}`, `offline:${pub}`, `offpend:${pub}`, `offtold:${pub}`,
                      `oldnag:${pub}`, `stale:${pub}`, `ver:${pub}`, `tier:${pub}`, `idle:${pub}`, `idlewarn:${pub}`]) await drop(k);
     await dropPrefix(`roomreq:${pub}:`);
+    this.lastCall.delete(pub); this.metaWritten.delete(`ver:${pub}`); this.metaWritten.delete(`host:${pub}`); // presence forgotten means forgotten here too
 
     if (b) {
       await drop(`pub:${pub}`);
@@ -791,7 +897,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     if (!isLang(m.lang)) m.lang = isLang(old?.lang) ? old!.lang : await this.userLang(m.by || undefined); // v0.17.0: a group starts in its wirer's language
     if (old && old.room !== m.room) {
       const prev = ((await this.get<string[]>(`mirrors:${old.room}`)) ?? []).filter((g) => g !== gid);
-      if (prev.length) await this.put(`mirrors:${old.room}`, prev); else await this.ctx.storage.delete(`mirrors:${old.room}`);
+      if (prev.length) await this.put(`mirrors:${old.room}`, prev); else await this.del(`mirrors:${old.room}`);
     }
     await this.put(`mirror:${gid}`, m);
     const list = new Set((await this.get<string[]>(`mirrors:${m.room}`)) ?? []);
@@ -821,7 +927,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
 
   private async armAlarm(at: number): Promise<void> {
     const cur = await this.ctx.storage.getAlarm();
-    if (cur == null || cur > at) await this.ctx.storage.setAlarm(at);
+    if (cur == null || cur > at) await this.setAlarmAt(at);
   }
   /** Remember that the principal has heard the agent is away — only then is a "back online" push worth sending. */
   private async markToldOffline(pub: string, p: { online: boolean }): Promise<void> {
@@ -855,35 +961,56 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
   }
 
   private async touch(pub: string, path: string, host?: string): Promise<void> {
+    const nowMs = Date.now();
+    // /p/offline: remember the call in memory only (so offlineAt >= seenMs holds), persist nothing; the route does the rest.
+    if (path === "/p/offline") { BridgeDO.remember(this.lastCall, pub, nowMs); return; }
     const before = await this.presence(pub);
-    const now = new Date().toISOString();
-    await this.put(`seen:${pub}`, now);
+    const offpend = await this.get<OffPend>(`offpend:${pub}`);
+    // 2026-09-14 write budget: an agent that stays online writes seen: at most every SEEN_PERSIST_MS, and nothing else.
+    const transition = !before.online || !!offpend;
+    BridgeDO.remember(this.lastCall, pub, nowMs);
+    const storedSeen = await this.get<string>(`seen:${pub}`);
+    const age = nowMs - (storedSeen ? Date.parse(storedSeen) || 0 : 0);
+    let persistSeen = transition || age >= this.seenPersistMs(pub);
+    if (persistSeen && !transition && age < Math.max(UNBOUND_SEEN_PERSIST_MS, this.seenPersistMs(pub))
+        && !(await this.bindingByPub(pub)) && !(await this.get(`hosted:${pub}`))) persistSeen = false; // nobody is told about an unbound key's presence
+    if (persistSeen) await this.bookkeep(() => this.put(`seen:${pub}`, new Date(nowMs).toISOString()));
     // v0.9.14 (G-4 R8): which of this relay's names the agent last used — so an old name is retired on numbers, not guesses.
-    if (host && (await this.get<string>(`host:${pub}`)) !== host) await this.put(`host:${pub}`, host);
-    if (path.startsWith("/p/inbox")) await this.put(`read:${pub}`, now);
-    // review R20: a session that dies without a goodbye (power loss, kill -9) never posts /p/offline. Arm a
-    // check for when it would count as stale; sweepStale() announces it if nothing touched us by then.
-    await this.put(`stale:${pub}`, Date.now() + PRESENCE_STALE_MS + 1000);
-    await this.armAlarm(Date.now() + PRESENCE_STALE_MS + 2000);
-    if (path === "/p/offline") return; // handled by the route itself
-    // Any call from the agent means it is here. A goodbye still inside its grace was never announced
-    // (another session of the same agent is alive, or this one restarted at once) — drop it silently;
-    // `before.online` is true while it is held, so the "back" push below is correctly skipped.
-    if (await this.get<OffPend>(`offpend:${pub}`)) {
-      await this.ctx.storage.delete(`offpend:${pub}`);
-      await this.ctx.storage.delete(`offline:${pub}`);
+    if (host && (await this.get<string>(`host:${pub}`)) !== host && nowMs - (this.metaWritten.get(`host:${pub}`) ?? 0) >= META_PERSIST_MS) {
+      if (await this.bookkeep(() => this.put(`host:${pub}`, host))) BridgeDO.remember(this.metaWritten, `host:${pub}`, nowMs);
     }
-    if (!before.online) {
-      await this.ctx.storage.delete(`offline:${pub}`);
-      const told = await this.get<string>(`offtold:${pub}`);
-      if (told) await this.ctx.storage.delete(`offtold:${pub}`);
-      const b = await this.bindingByPub(pub);
-      if (b && before.lastSeen && told) { // never-seen agents, and absences nobody was told about, get no "back" push
-        const queued = ((await this.get<InboxItem[]>(`inbox:${pub}`)) ?? []).filter((i) => !before.lastRead || i.at > before.lastRead).length;
-        const L = await this.placeLang(b.userId);
-        const gone = before.sinceMin != null ? tr(L, "（離線 {min} 分鐘後）", { min: before.sinceMin }) : "";
-        await this.push(b.userId, "presence:online", tr(L, "🟢 你的 agent（{name}）回來了{gone}。{queued}", { name: b.name || short(pub), gone, queued: queued ? tr(L, "排隊中的 {n} 則指令會在它下次讀取時送達。", { n: queued }) : "" }).trim());
+    // review R20: a session that dies without a goodbye (power loss, kill -9) never posts /p/offline. Arm a check for
+    // when it would count as stale; sweepStale() announces it if nothing touched us by then. 2026-09-14: armed once —
+    // sweepStale() works out the real deadline from seen: and the last call, and keeps the key while the agent is here.
+    if (!(await this.get<number>(`stale:${pub}`))) {
+      await this.bookkeep(async () => {
+        await this.put(`stale:${pub}`, nowMs + this.staleMs(pub) + 1000);
+        await this.armAlarm(nowMs + this.staleMs(pub) + 2000);
+      });
+    }
+    try {
+      // Any call from the agent means it is here. A goodbye still inside its grace was never announced
+      // (another session of the same agent is alive, or this one restarted at once) — drop it silently;
+      // `before.online` is true while it is held, so the "back" push below is correctly skipped.
+      if (offpend) {
+        await this.del(`offpend:${pub}`);
+        await this.del(`offline:${pub}`);
       }
+      if (!before.online) {
+        await this.del(`offline:${pub}`);
+        const told = await this.get<string>(`offtold:${pub}`);
+        if (told) await this.del(`offtold:${pub}`);
+        const b = await this.bindingByPub(pub);
+        if (b && before.lastSeen && told) { // never-seen agents, and absences nobody was told about, get no "back" push
+          const queued = ((await this.get<InboxItem[]>(`inbox:${pub}`)) ?? []).filter((i) => !before.lastRead || i.at > before.lastRead).length;
+          const L = await this.placeLang(b.userId);
+          const gone = before.sinceMin != null ? tr(L, "（離線 {min} 分鐘後）", { min: before.sinceMin }) : "";
+          await this.push(b.userId, "presence:online", tr(L, "🟢 你的 agent（{name}）回來了{gone}。{queued}", { name: b.name || short(pub), gone, queued: queued ? tr(L, "排隊中的 {n} 則指令會在它下次讀取時送達。", { n: queued }) : "" }).trim());
+        }
+      }
+    } catch (e) {
+      // Presence is bookkeeping too: a request (an inbox read above all) must not fail because it could not be saved.
+      console.error(`bridge: presence transition for ${short(pub)} not saved: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   private offlineNote(p: { online: boolean; sinceMin: number | null; lastSeen: string | null }, L: string): string {
@@ -952,10 +1079,21 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
   /** review R20: agents that stopped heartbeating without a goodbye. */
   private async sweepStale(): Promise<number | null> {
     let next: number | null = null;
-    for (const [key, due] of await this.ctx.storage.list<number>({ prefix: "stale:" })) {
-      if (Date.now() < due) { next = next == null ? due : Math.min(next, due); continue; }
+    for (const [key, storedDue] of await this.ctx.storage.list<number>({ prefix: "stale:" })) {
       const pub = key.slice("stale:".length);
-      await this.ctx.storage.delete(key);
+      // 2026-09-14: touch() no longer rewrites stale: on every call, so the deadline is worked out here: the stored one,
+      // or later if the agent was seen (stored seen:, or this instance's last call) after it was armed. Not due yet →
+      // keep the key and look again then, rounded up to a grid so many agents share one alarm instead of one each.
+      const st = this.staleMs(pub);
+      const seen = await this.get<string>(`seen:${pub}`);
+      const due = Math.max(storedDue, (seen ? Date.parse(seen) || 0 : 0) + st + 1000, (this.lastCall.get(pub) ?? 0) + st + 1000);
+      if (Date.now() < due) {
+        const grid = Math.min(60_000, Math.max(1000, Math.round(st / 4)));
+        const at = Math.ceil(due / grid) * grid;
+        next = next == null ? at : Math.min(next, at);
+        continue;
+      }
+      await this.del(key);
       const p = await this.presence(pub);
       if (p.online) continue; // touched again meanwhile (the key was re-armed and we will see the new one)
       if (await this.get<string>(`offtold:${pub}`)) continue; // already announced by the goodbye path
@@ -975,10 +1113,11 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     for (const [key, p] of await this.ctx.storage.list<OffPend>({ prefix: "offpend:" })) {
       if (Date.now() < p.due) { next = next == null ? p.due : Math.min(next, p.due); continue; }
       const pub = key.slice("offpend:".length);
-      await this.ctx.storage.delete(key);
+      await this.del(key);
       if (!(await this.get<string>(`offline:${pub}`))) continue; // a /p/* call cleared it: the agent is still around
       const seen = await this.get<string>(`seen:${pub}`);
-      if (seen && seen > p.at) continue; // heartbeat after the goodbye: a sibling session is holding the fort
+      const seenMs = Math.max(seen ? Date.parse(seen) || 0 : 0, this.lastCall.get(pub) ?? 0);
+      if (seenMs > Date.parse(p.at)) continue; // heartbeat after the goodbye: a sibling session is holding the fort
       const b = await this.bindingByPub(pub);
       if (!b) continue;
       await this.put(`offtold:${pub}`, p.at);
@@ -991,6 +1130,10 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
   }
 
   override async alarm(): Promise<void> {
+    this.inAlarm++;
+    try { await this.alarmBody(); } finally { this.inAlarm--; }
+  }
+  private async alarmBody(): Promise<void> {
     const nextOffline = await this.sweepOffline(); // may queue a push, so run it before the queue drains
     const nextStale = await this.sweepStale();     // review R20
     const nextUnacked = await this.sweepUnacked(); // v0.8.0: may queue a reminder push, same reason
@@ -1016,7 +1159,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       const log = (await this.get<Pushed[]>("pushes")) ?? [];
       log.push({ at: item.at, to: item.to, kind: item.kind, text: item.text, delivered, ...(item.image ? { image: item.image } : {}), ...(item.sender ? { sender: item.sender } : {}), ...(attempts > 1 ? { attempts } : {}) });
       await this.put("pushes", log.slice(-50));
-      await this.ctx.storage.delete(key);
+      await this.del(key);
       if (v.gate === "over-budget") await this.warnOperatorOnce("budget", `⚠️ relay 這個月的 ${this.chanFor(this.env.OPERATOR_LINE_USER_ID).vocab.chat} 推播額度用完了（${item.kind} 給 ${short(item.to)} 沒送出）。之後到月底的推播都會消失。`); // i18n-ok: to the operator
     }
     if (nextRetry != null) await this.armAlarm(nextRetry);
@@ -1032,8 +1175,8 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
   }
 
   private async purgeImage(id: string, chunks: number): Promise<void> {
-    await this.ctx.storage.delete(`img:${id}`);
-    for (let i = 0; i < chunks; i++) await this.ctx.storage.delete(`imgc:${id}:${i}`);
+    await this.del(`img:${id}`);
+    for (let i = 0; i < chunks; i++) await this.del(`imgc:${id}:${i}`);
   }
 
   /** v0.15.0: what happened to one push, as a structure. `text` is the legacy one-line verdict for the push log and
@@ -1261,8 +1404,8 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       const b = (await c.req.json().catch(() => ({}))) as { pub?: string; userId?: string };
       if (!b.pub && !b.userId) return c.json({ error: "pub or userId required" }, 400);
       const { pubs, users } = await banTargets(b);
-      for (const p of pubs) await this.ctx.storage.delete(`ban:pub:${p}`);
-      for (const u of users) await this.ctx.storage.delete(`ban:user:${u}`);
+      for (const p of pubs) await this.del(`ban:pub:${p}`);
+      for (const u of users) await this.del(`ban:user:${u}`);
       return c.json({ ok: true });
     });
     // v0.9.14 (G-4 R8): how many agents still use each of this relay's names, and when they were last seen.
@@ -1321,13 +1464,31 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     app.use("/p/*", async (c, next) => {
       const v = await this.verifyAgent(c);
       if (v instanceof Response) return v;
+      // 2026-09-14 write budget: inbox reads are paced per key, in memory, before any storage access — a client stuck
+      // in a tight loop costs the relay a signature check and nothing else. Presence routes (online / offline /
+      // heartbeat) and everything else are exempt: they are infrequent by construction.
+      if (c.req.path === "/p/inbox") {
+        if (this.env.DEBUG_ROUTES === "1") {
+          BridgeDO.remember(this.debugInboxCalls, v.pub, (this.debugInboxCalls.get(v.pub) ?? 0) + 1);
+          if (this.debugBucket === undefined) this.debugBucket = (await this.get<{ burst: number; refillMs: number }>("debug:bucket")) ?? null; // dev only, once per instance
+        }
+        const t = this.takeInboxToken(v.pub);
+        if (!t.ok) {
+          c.header("Retry-After", String(t.retryAfterSec));
+          c.header("x-can2cup-min", this.minClient());
+          return c.json({ error: `too many inbox reads from this key — retry in ${t.retryAfterSec} s (an idle poll every 30 s is plenty)`, retryAfterSec: t.retryAfterSec }, 429);
+        }
+      }
       if (await this.get(`ban:pub:${v.pub}`)) return c.json({ error: "this identity is banned by the relay operator" }, 403);
       c.set("pub" as never, v.pub as never);
       c.set("body" as never, v.body as never);
       // v0.9.0 upgrade protocol: remember what this agent runs; refuse the A2A routes below the minimum.
       const ver = (c.req.header("x-can2cup-client") ?? "").trim() || NO_VERSION;
       c.set("ver" as never, ver as never);
-      if (ver !== NO_VERSION && (await this.get<string>(`ver:${v.pub}`)) !== ver) await this.put(`ver:${v.pub}`, ver);
+      // 2026-09-14: two processes on one key may run different versions — rewrite ver: at most every META_PERSIST_MS.
+      if (ver !== NO_VERSION && Date.now() - (this.metaWritten.get(`ver:${v.pub}`) ?? 0) >= META_PERSIST_MS && (await this.get<string>(`ver:${v.pub}`)) !== ver) {
+        if (await this.bookkeep(() => this.put(`ver:${v.pub}`, ver))) BridgeDO.remember(this.metaWritten, `ver:${v.pub}`, Date.now());
+      }
       if (/^\/p\/(rooms|room-created|invite)$/.test(c.req.path) && cmpSemver(ver, this.minClient()) < 0) {
         c.res = await this.upgradeRequired(c, ver);
       } else {
@@ -1363,7 +1524,11 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       // the 同意 button honestly. Stored per agent; a client from before this never sends it (→ "not reported").
       await this.armAlarm(Date.now() + 5 * 60_000); // v0.9.12: make sure the daily idle sweep has an alarm to ride, even on a quiet relay
       const ob = JSON.parse((c.get("body" as never) as string) || "{}") as { tier?: { widened?: unknown; unsigned_may_commit?: unknown } };
-      if (ob.tier && typeof ob.tier === "object") await this.put(`tier:${pub}`, { widened: ob.tier.widened === true, unsigned_may_commit: ob.tier.unsigned_may_commit === true, at: new Date().toISOString() });
+      if (ob.tier && typeof ob.tier === "object") {
+        const tier = { widened: ob.tier.widened === true, unsigned_may_commit: ob.tier.unsigned_may_commit === true };
+        const prevTier = await this.get<{ widened: boolean; unsigned_may_commit: boolean }>(`tier:${pub}`);
+        if (!prevTier || prevTier.widened !== tier.widened || prevTier.unsigned_may_commit !== tier.unsigned_may_commit) await this.put(`tier:${pub}`, { ...tier, at: new Date().toISOString() }); // 2026-09-14: only when it changed
+      }
       const lastRead = await this.get<string>(`read:${pub}`);
       const items = (await this.get<InboxItem[]>(`inbox:${pub}`)) ?? [];
       const rooms = (await this.get<Record<string, RoomKnown>>(`rooms:${pub}`)) ?? {};
@@ -1403,12 +1568,12 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       const rec = code ? await this.get<{ userId: string; at: number; ttlMs?: number }>(`pcode:${code}`) : undefined;
       if (!rec || Date.now() - rec.at > (rec.ttlMs ?? CODE_TTL_MS)) { await this.codeMiss("claim", pub); return c.json({ error: "unknown or expired code" }, 404); }
       if (await this.get(`ban:user:${rec.userId}`)) { await this.put(`ban:pub:${pub}`, { at: new Date().toISOString(), why: "claimed by a banned chat user" }); return c.json({ error: "banned" }, 403); } // review R9
-      await this.ctx.storage.delete(`pcode:${code}`);
+      await this.del(`pcode:${code}`);
       const lang = await this.userLang(rec.userId); // v0.17.0: read BEFORE the binding exists (a bound account without one reads as legacy)
       const prevByUser = await this.bindingByUser(rec.userId);
-      if (prevByUser) await this.ctx.storage.delete(`pub:${prevByUser.pub}`);
+      if (prevByUser) await this.del(`pub:${prevByUser.pub}`);
       const prevByPub = await this.bindingByPub(pub);
-      if (prevByPub) await this.ctx.storage.delete(`user:${prevByPub.userId}`);
+      if (prevByPub) await this.del(`user:${prevByPub.userId}`);
       const binding: Binding = { pub, name: b.name ?? "", userId: rec.userId, agentMode: false, boundAt: new Date().toISOString() };
       await this.put(`user:${rec.userId}`, binding);
       await this.put(`pub:${pub}`, binding);
@@ -1460,8 +1625,8 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       }
       await this.put(`principal:${pub}`, b.principalPub);
       if (prev && prev !== b.principalPub) {
-        await this.ctx.storage.delete(`spause:${pub}`); // a new principal key: old signed pause no longer applies
-        if (prevProof) { await this.ctx.storage.delete(`principalProof:${pub}`); await this.ctx.storage.delete(`principalAgent:${prev}:${pub}`); }
+        await this.del(`spause:${pub}`); // a new principal key: old signed pause no longer applies
+        if (prevProof) { await this.del(`principalProof:${pub}`); await this.del(`principalAgent:${prev}:${pub}`); }
       }
       if (b.proof) {
         await this.put(`principalProof:${pub}`, { principalPub: b.principalPub, relayPub: this.relayPub(), at: b.proof.at, verifiedAt: new Date().toISOString() } as AgentProof);
@@ -1487,8 +1652,10 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       const pub = c.get("pub" as never) as string;
       // v0.11.3 (smoke, fifth opinion #1): let the suite make the NEXT n inbox reads fail while everything else works.
       if (this.env.DEBUG_ROUTES === "1") {
-        const n = (await this.get<number>(`debug:inboxfail:${pub}`)) ?? 0;
-        if (n > 0) { await this.put(`debug:inboxfail:${pub}`, n - 1); return c.json({ error: "debug: inbox unavailable" }, 503); }
+        const f = await this.get<number | { n: number; status: number }>(`debug:inboxfail:${pub}`);
+        const fn = typeof f === "number" ? f : f?.n ?? 0;
+        const fstatus = typeof f === "object" && f ? f.status : 503;
+        if (fn > 0) { await this.put(`debug:inboxfail:${pub}`, { n: fn - 1, status: fstatus }); return c.json({ error: "debug: inbox unavailable" }, fstatus as 503); }
       }
       const since = Number(c.req.query("since") ?? 0) || 0;
       const peek = c.req.query("peek") === "1";          // review R14: look without starting a lease
@@ -1512,6 +1679,10 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
         out.push(i);
       }
       if (touched) { await this.put(`inbox:${pub}`, all); await this.armAlarm(now + this.leaseMs() + 1000); }
+      // 2026-09-14: the read cursor moves only when something was actually handed out (a peek or an empty poll is not a read).
+      if (!peek && out.length > 0) await this.bookkeep(() => this.put(`read:${pub}`, new Date(now).toISOString()), { budget: false });
+      // An empty answer tells the client how long to leave it; longer when this key has been reading hard.
+      if (!out.length) { const burst = this.bucketSpec(pub).burst; c.header("x-can2cup-poll-after", String((this.buckets.get(pub)?.tokens ?? burst) < burst / 2 ? POLL_AFTER_SLOW_SEC : POLL_AFTER_SEC)); }
       const b = await this.bindingByPub(pub);
       return c.json({ messages: out, paused: (await this.get<boolean>(`paused:${pub}`)) ?? false, bound: !!b, lastSeq: (await this.get<number>(`inboxSeq:${pub}`)) ?? 0 });
     });
@@ -1657,7 +1828,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       // v0.9.9 T4, defence in depth: two /room in the same second can race the request-time check.
       const held = await this.wiredByOther(b.group, bind?.userId);
       if (held) return c.json({ error: "that group is connected by someone else; ask them to /unmirror first", by: held.by }, 403);
-      await this.ctx.storage.delete(`roomreq:${pub}:${b.group}`);
+      await this.del(`roomreq:${pub}:${b.group}`);
       const name = b.name || pend.name || "";
       // codex 6.0: this endpoint also mints an inv: code, so it shares the per-pub daily mint quota with /p/invite —
       // otherwise repeatedly re-wiring a known group could mint past the cap.
@@ -1741,7 +1912,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       await this.put(`img:${id}`, { mime, expires, chunks, by: pub } as ImgMeta);
       await this.put(imgQ, imgUsed + b.data.length);
       const cur = await this.ctx.storage.getAlarm();
-      if (cur == null || cur > expires + 1000) await this.ctx.storage.setAlarm(expires + 1000);
+      if (cur == null || cur > expires + 1000) await this.setAlarmAt(expires + 1000);
       return c.json({ ok: true, id, url: `${new URL(c.req.url).origin}/f/${id}`, expiresInSec: ttl });
     });
 
@@ -1849,13 +2020,13 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       const rec = await this.get<{ pub: string; name: string; at: number }>(`code:${code}`);
       if (!rec || Date.now() - rec.at > CODE_TTL_MS) { await this.codeMiss("link", b.userId); return c.json({ error: "unknown or expired code" }, 404); }
       if ((await this.get(`ban:user:${b.userId}`)) || (await this.get(`ban:pub:${rec.pub}`))) return c.json({ error: "banned" }, 403);
-      await this.ctx.storage.delete(`code:${code}`);
+      await this.del(`code:${code}`);
       const lang = await this.userLang(b.userId, b.locale); // v0.17.0: before the binding exists
       // one user ↔ one agent; re-linking replaces both directions
       const prevByUser = await this.bindingByUser(b.userId);
-      if (prevByUser) await this.ctx.storage.delete(`pub:${prevByUser.pub}`);
+      if (prevByUser) await this.del(`pub:${prevByUser.pub}`);
       const prevByPub = await this.bindingByPub(rec.pub);
-      if (prevByPub) await this.ctx.storage.delete(`user:${prevByPub.userId}`);
+      if (prevByPub) await this.del(`user:${prevByPub.userId}`);
       const binding: Binding = { pub: rec.pub, name: rec.name, userId: b.userId, agentMode: false, boundAt: new Date().toISOString() };
       await this.put(`user:${b.userId}`, binding);
       await this.put(`pub:${rec.pub}`, binding);
@@ -1980,7 +2151,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       // Remember where the principal spoke from, so the agent's reply can go back there (v0.3.2).
       let g: KnownGroup | undefined;
       if (p.groupId) { await this.put(`lastGroup:${b.pub}`, p.groupId); g = await this.noteGroup(b.pub, p.groupId, p.groupName); }
-      else await this.ctx.storage.delete(`lastGroup:${b.pub}`);
+      else await this.del(`lastGroup:${b.pub}`);
       // v0.9.10 B2: a tapped 同意/拒絕 button is its own tier — still unsigned, but the agent should know it was a button, not typed words.
       const app = this.chanFor(p.userId).name;
       const via = /\(principal tapped the button\)$/.test(p.text) ? `${app}-button` : p.groupId ? `${app}-group` : app;
@@ -2009,7 +2180,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     app.post("/bridge/context", async (c) => {
       const p = (await c.req.json().catch(() => ({}))) as { groupId?: string; on?: boolean; userId?: string };
       if (!p.groupId) return c.json({ error: "groupId required" }, 400);
-      if (p.on === false) { await this.ctx.storage.delete(`ctx:${p.groupId}`); await this.ctx.storage.delete(`glog:${p.groupId}`); return c.json({ ok: true, context: false }); }
+      if (p.on === false) { await this.del(`ctx:${p.groupId}`); await this.del(`glog:${p.groupId}`); return c.json({ ok: true, context: false }); }
       const m = await this.get<Mirror>(`mirror:${p.groupId}`);
       if (!m) return c.json({ error: "that group is not connected to any agent yet" }, 404);
       if (!p.userId || p.userId !== m.by) {
@@ -2056,7 +2227,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     app.post("/bridge/quiet", async (c) => {
       const p = (await c.req.json().catch(() => ({}))) as { groupId?: string; on?: boolean };
       if (!p.groupId) return c.json({ error: "groupId required" }, 400);
-      if (p.on === false) await this.ctx.storage.delete(`quiet:${p.groupId}`);
+      if (p.on === false) await this.del(`quiet:${p.groupId}`);
       else await this.put(`quiet:${p.groupId}`, true);
       return c.json({ ok: true, quiet: p.on !== false });
     });
@@ -2175,7 +2346,7 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       const gid = c.req.param("groupId");
       const m = await this.get<Mirror>(`mirror:${gid}`);
       if (m) {
-        await this.ctx.storage.delete(`mirror:${gid}`);
+        await this.del(`mirror:${gid}`);
         const list = ((await this.get<string[]>(`mirrors:${m.room}`)) ?? []).filter((g) => g !== gid);
         await this.put(`mirrors:${m.room}`, list);
         if (!list.length) await this.keepAlive(m.room, false); // no group points at it any more
@@ -2237,23 +2408,60 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     // v0.11.2 (smoke, fourth opinion #9): there is no product path that widens a hosted mandate; this lets the suite
     // prove that even a widened one unlocks no commitment on the hosted surface.
     app.post("/bridge/debug/inbox-fail", async (c) => {
-      const p = (await c.req.json().catch(() => ({}))) as { userId?: string; n?: number };
+      const p = (await c.req.json().catch(() => ({}))) as { userId?: string; n?: number; status?: number };
       const b = p.userId ? await this.bindingByUser(p.userId) : undefined;
       if (!b) return c.json({ error: "userId required" }, 400);
-      await this.put(`debug:inboxfail:${b.pub}`, Math.max(0, Number(p.n ?? 1) || 0));
+      const status = Number(p.status) >= 400 && Number(p.status) <= 599 ? Number(p.status) : 503;
+      await this.put(`debug:inboxfail:${b.pub}`, { n: Math.max(0, Number(p.n ?? 1) || 0), status });
       return c.json({ ok: true });
+    });
+    // 2026-09-14 (write budget): every put / delete / setAlarm this DO made since the last reset. `pub` narrows `forPub`
+    // and `keys` to that agent's keys and adds how many /p/inbox requests it sent (429s included). setAlarm is split
+    // into "(request)" and "(alarm)" by where it was called from.
+    app.get("/bridge/debug/writes", async (c) => {
+      const pub = c.req.query("pub") ?? "";
+      const keys: Record<string, number> = {};
+      let forPub = 0;
+      for (const [k, n] of this.debugWrites.keys) if (!pub || k.includes(pub)) { keys[k] = n; if (pub && !k.startsWith("setAlarm")) forPub += n; }
+      const w = this.debugWrites;
+      const out = {
+        put: w.put, delete: w.delete, setAlarm: w.setAlarm, total: w.put + w.delete + w.setAlarm,
+        setAlarmRequest: w.keys.get("setAlarm(request)") ?? 0, setAlarmAlarm: w.keys.get("setAlarm(alarm)") ?? 0,
+        forPub, keys, inboxCalls: pub ? this.debugInboxCalls.get(pub) ?? 0 : [...this.debugInboxCalls.values()].reduce((a, b) => a + b, 0),
+      };
+      if (c.req.query("reset") === "1") { this.debugWrites = { put: 0, delete: 0, setAlarm: 0, keys: new Map() }; this.debugInboxCalls.clear(); }
+      return c.json(out);
+    });
+    // The /p/inbox token bucket: { burst, refillMs } relay-wide (stored), or for one `pub` (memory); no burst clears.
+    // Clearing a key's override also refills its bucket, so a test starts from a full burst.
+    app.post("/bridge/debug/inbox-bucket", async (c) => {
+      const p = (await c.req.json().catch(() => ({}))) as { pub?: string; burst?: number; refillMs?: number };
+      const spec = Number(p.burst) > 0 && Number(p.refillMs) > 0 ? { burst: Number(p.burst), refillMs: Number(p.refillMs) } : null;
+      if (p.pub) { if (spec) this.debugBucketFor.set(p.pub, spec); else this.debugBucketFor.delete(p.pub); this.buckets.delete(p.pub); }
+      else { this.debugBucket = spec; if (spec) await this.put("debug:bucket", spec); else await this.del("debug:bucket"); this.buckets.clear(); }
+      return c.json({ ok: true, ...(p.pub ? { pub: p.pub } : {}), spec: p.pub ? this.bucketSpec(p.pub) : this.debugBucket ?? INBOX_BUCKET });
+    });
+    // Per-agent presence timers (seconds), so the suite can watch stale detection without the 3-minute production clock
+    // and without shortening it for every other agent in the run. null / 0 clears.
+    app.post("/bridge/debug/presence-timers", async (c) => {
+      const p = (await c.req.json().catch(() => ({}))) as { pub?: string; staleSec?: number | null; seenPersistSec?: number | null };
+      if (!p.pub) return c.json({ error: "pub required" }, 400);
+      const staleMs = Number(p.staleSec) > 0 ? Number(p.staleSec) * 1000 : undefined;
+      const persistMs = Number(p.seenPersistSec) > 0 ? Number(p.seenPersistSec) * 1000 : undefined;
+      if (!staleMs && !persistMs) this.debugTimers.delete(p.pub); else this.debugTimers.set(p.pub, { staleMs, persistMs });
+      return c.json({ ok: true, staleMs: this.staleMs(p.pub), seenPersistMs: this.seenPersistMs(p.pub) });
     });
     app.post("/bridge/debug/hmandate", async (c) => {
       const p = (await c.req.json().catch(() => ({}))) as { pub?: string; mandate?: Record<string, unknown> | null };
       if (!p.pub) return c.json({ error: "pub required" }, 400);
-      if (p.mandate === null) await this.ctx.storage.delete(`hmandate:${p.pub}`); else await this.put(`hmandate:${p.pub}`, p.mandate ?? {});
+      if (p.mandate === null) await this.del(`hmandate:${p.pub}`); else await this.put(`hmandate:${p.pub}`, p.mandate ?? {});
       return c.json({ ok: true });
     });
     app.post("/bridge/debug/forget-spause", async (c) => {
       const p = (await c.req.json().catch(() => ({}))) as { userId?: string };
       const b = p.userId ? await this.bindingByUser(p.userId) : undefined;
       if (!b) return c.json({ error: "userId required" }, 400);
-      await this.ctx.storage.delete(`spause:${b.pub}`);
+      await this.del(`spause:${b.pub}`);
       return c.json({ ok: true });
     });
     // v0.9.12 (smoke): run one idle sweep now, narrowed to one agent or one group so nothing else in the run is touched.

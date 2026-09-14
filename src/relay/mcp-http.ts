@@ -96,6 +96,8 @@ export interface McpDeps {
   roomsFor(pub: string): Promise<Record<string, McpRoom>>;
   pendingInbox(pub: string): Promise<number>;
   awayAt(pub: string): Promise<string | undefined>;
+  /** 2026-09-14: record a hosted agent's call in memory (seen: itself is persisted at most every 10 min). */
+  noteCall(pub: string): void;
   /** Creates the binding both ways, exactly as the LINE /link flow does. */
   bind(userId: string, pub: string, name: string): Promise<void>;
   isPaused(pub: string): Promise<boolean>;
@@ -440,6 +442,9 @@ async function mandateBlock(d: McpDeps, pub: string, type: MsgType, body: Record
   return msg && (/^(blocked by mandate|held for principal confirmation)/.test(msg) ? `${msg} NOT SENT.` : msg);
 }
 
+/** = META_PERSIST_MS in bridge.ts (not imported: bridge.ts imports this module). */
+const HOSTED_SEEN_PERSIST_MS = 600_000;
+
 const j = async (res: Response): Promise<Record<string, unknown>> => {
   const t = await res.text();
   try { return t ? JSON.parse(t) : {}; } catch { return { error: t.slice(0, 200) }; }
@@ -450,7 +455,15 @@ async function callTool(d: McpDeps, pub: string, name: string, args: Record<stri
   const hosted = await hostedKeyOf(d, pub);
   // v0.9.14: a hosted agent has no heartbeat; each connector call is its "being seen", so the idle-binding
   // rule (v0.9.12) can cover it the same way it covers a local agent.
-  if (hosted) await d.put(`seen:${pub}`, new Date().toISOString());
+  // 2026-09-14 write budget: the idle clock counts days, so one write per HOSTED_SEEN_PERSIST_MS is plenty — and a
+  // failed bookkeeping write (the daily row cap) must not fail the tool call.
+  if (hosted) {
+    d.noteCall(pub); // in memory: the idle clock and presence see this call even when seen: is not rewritten
+    try {
+      const prev = await d.get<string>(`seen:${pub}`);
+      if (!prev || Date.now() - (Date.parse(prev) || 0) >= HOSTED_SEEN_PERSIST_MS) await d.put(`seen:${pub}`, new Date().toISOString());
+    } catch { /* bookkeeping only */ }
+  }
 
   if (WRITE_TOOLS.includes(name) && !hosted) {
     return "This agent's signing key lives on its owner's machine, so the relay cannot act for it. "

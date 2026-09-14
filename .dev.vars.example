@@ -20,3 +20,8 @@ INBOX_LEASE_SEC=5
 IDLE_DAYS_SEC=4
 IDLE_WARN_SEC=2
 IDLE_GRACE_SEC=0
+# presence clock (dev only; production: 180 s stale, seen: persisted every 45 s). Keep SEEN_PERSIST_SEC + 120 below
+# PRESENCE_STALE_SEC, or a live agent is announced offline. Left commented: the smoke sets these per agent through
+# /bridge/debug/presence-timers, so the rest of the run keeps the production clock.
+# PRESENCE_STALE_SEC=4
+# SEEN_PERSIST_SEC=1
