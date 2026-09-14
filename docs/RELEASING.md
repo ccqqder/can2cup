@@ -26,8 +26,9 @@ npx -y npm@latest stage approve <id> --auth-type=web   # 2FA → the version is 
 npm run release:relay        # routes-check → download THAT tarball from npm → sign its hash into dl/manifest.json → wrangler deploy
 npm run release:relay:local  # emergency variant: stage the locally packed tarball instead (npm down); then `npm run release:npm` by hand
 
-# 4. a GitHub Release for the tag, with the changelog entry as its body:
-node scripts/gh-release.mjs v<version>     # extracts the entry from changelog.txt and runs `gh release create`
+# 4. a GitHub Release for the tag, with the changelog entry as its body and the signed metadata attached:
+node scripts/gh-release.mjs v<version>     # extracts the entry from changelog.txt, runs `gh release create`, uploads
+                                           # dl/manifest.json, manifest.sig, VERSION.sha256 (verified first; --no-assets skips)
 ```
 
 `can2cup upgrade` on every client then downloads from npm (or `--from-relay`) and installs only if the tarball's hash
@@ -36,6 +37,36 @@ what `release:relay` rewrites and deploys; the tarballs themselves are gitignore
 
 Do not leave a tag that never shipped: a tag either goes through step 3 or the next version absorbs it and the tag is
 deleted.
+
+## Other deployments: flags and the keyless mirror
+
+The release scripts default to this repository's `wrangler.toml` and `relay-assets/`. A deployment that keeps this
+repository in a subdirectory and has its own config and assets directory passes them explicitly (the project files —
+`package.json`, `SKILL.md`, the changelog, the packed tarball — always resolve against this repository, whatever the
+working directory):
+
+```bash
+node scripts/routes-check.mjs --config <wrangler.toml>
+node scripts/stage-tarball.mjs --from-npm --config <wrangler.toml> --assets <dir> [--changelog <file>]
+node scripts/release-sign.mjs --assets <dir>                  # the maintainer's key only
+node scripts/gh-release.mjs v<version> --dl <dir>/dl          # attach that directory's signed metadata
+```
+
+A deployment without the key mirrors a release instead of signing one:
+
+```bash
+node scripts/mirror-dl.mjs --version <x.y.z> --out <assets>/dl                 # metadata from this repository's GitHub Release
+node scripts/mirror-dl.mjs --version <x.y.z> --out <dir> --from-release <owner/repo>
+node scripts/mirror-dl.mjs --version <x.y.z> --out <dir> --from-relay https://<relay>   # from a relay's /dl/ instead
+```
+
+It downloads the tarball from the npm registry (`--registry` to use another) and `manifest.json`, `manifest.sig`,
+`VERSION.sha256` from the GitHub Release of `v<version>` (step 4 attaches them) or from `<relay>/dl/`. It writes nothing
+unless the signature verifies against `RELEASE_PUBS` (from `dist/`, so build first), the manifest names that version,
+every file it lists carries the tarball's hash and `VERSION.sha256` agrees; then `<out>` gets the layout
+`stage-tarball.mjs` + `release-sign.mjs` produce. Releases before this script existed have no such assets; use
+`--from-relay` for them. `scripts/assemble-assets.mjs --dl <out>` puts the result into an assets directory
+([RELAY-OPS.md](RELAY-OPS.md)).
 
 ## Signed releases
 
@@ -67,7 +98,7 @@ same place. Any change of default relay hostname is announced there too.
 ## What a release must pass
 
 Before cutting from `main`: `npm run build`, `npm run check:relay`, `check:pii`, `check:i18n` (CI runs these two
-again), the smoke against a local relay, `check:chat` if any chat text or bridge logic changed, and `check:routes`. After `release:relay`: `npm run probe:prod`. The shipped surface
+again), the smoke against a local relay, `check:chat` if any chat text or bridge logic changed, and `check:routes`. After `release:relay`: `npm run probe:prod -- --relay https://<relay>`. The shipped surface
 is the `files` list in `package.json` (`dist` minus `dist/scripts`, `README.md`, `SKILL.md`, `INSTALL.zh-tw.md`,
 `LICENSE`, `NOTICE`, `src/relay`, `src/protocol`, `tsconfig.relay.json`, `wrangler.toml`, `docs/SELF-HOST.md`) — the
 workflow's dry-run step prints what would ship.

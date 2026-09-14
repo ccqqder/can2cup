@@ -15,9 +15,28 @@ npx wrangler secret put RELAY_SIGNING_KEY  # hex ed25519 private key: node -e "i
 RELAY=http://127.0.0.1:8787 RELAY_KEY=dev BRIDGE_KEY=devbridge npm run smoke   # two MCP servers through a relay + a simulated bot, ~430 checks
 npm run check:line / check:discord / check:telegram   # one adapter each, forged webhooks against the dev relay
 npm run check:chat                      # the two-human story over LINE, Discord and Telegram with real clients (docs/chat-e2e.md)
-npm run probe:prod                      # after a deploy: production routes, secrets, one forged /a round trip on this machine's chat app
+npm run probe:prod -- --relay https://<relay>   # after a deploy: production routes, secrets, one forged /a round trip on this machine's chat app
 npm run check:routes                    # [[routes]] vs RELAY_CANONICAL / RELAY_ALIASES; release:relay runs it first
+                                        #   -- --config <toml> checks another deployment's config
+npm run assemble:assets -- --out <dir> [--overlay <dir>] [--dl <dir>]   # a complete assets directory (below)
+npm run mirror:dl -- --version <x.y.z> --out <dir>   # the signed install files of a release, verified, without the key
 ```
+
+`discord-app.mjs app`, `telegram-app.mjs describe|app|say|tap` and `probe-prod.mjs` have no default relay: pass
+`--relay https://<relay>`. `telegram-app.mjs tap` names the bot from `--bot-username` (else `TELEGRAM_BOT_USERNAME`).
+
+### The assets directory of another deployment
+
+`wrangler.toml`'s `[assets]` points at `relay-assets/`, which is this deployment's. A fork or a separate deployment
+repository builds its own with `scripts/assemble-assets.mjs --out <dir>`: the generic files from `relay-assets/`
+(`favicon.ico`, `apple-touch-icon.png`, `changelog.txt`, `known-issues.json`), `skill.md` and `selfhost.md` generated
+from `SKILL.md` and `docs/SELF-HOST.md`, `dl/` from `--dl` (default `relay-assets/dl`), then `--overlay <dir>` copied
+on top — its own guide, privacy page, `llms.txt`. An overlay `known-issues.json` is merged into the generic one
+(issue ids must not collide). Because static assets are served before the Worker, any file that would take over a
+Worker route (a root `index.html`, or anything under `terms`, `j/`, `mcp`, `oauth/`, `rooms/`, `p/`, `f/`, `bridge/`,
+`line/`, `discord/`, `telegram/`, `.well-known/` and the other routes read from `src/relay/index.ts`) is refused.
+`<out>` must be new or empty; the script prints a sha256 listing of what it wrote. Point that deployment's own
+wrangler config at `<out>` and run the release scripts with `--config` / `--assets` ([RELEASING.md](RELEASING.md)).
 
 `.dev.vars` for a local relay: `RELAY_KEY=dev`, `BRIDGE_KEY=devbridge`, `RELAY_SIGNING_KEY=<hex>`,
 `DEBUG_ROUTES=1` (exposes `/bridge/debug/pushes`, which the check scripts read instead of a real chat app),
