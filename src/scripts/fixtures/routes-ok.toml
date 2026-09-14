@@ -1,0 +1,19 @@
+# Fixture for scripts/routes-check.mjs (smoke): two custom-domain routes, both declared. Not a deployable config.
+name = "routes-fixture"
+workers_dev = true
+
+[[routes]]
+pattern = "relay.example.com"
+custom_domain = true
+
+[[routes]]
+pattern = "old-relay.example.com"
+custom_domain = true
+
+[[routes]]
+pattern = "example.org/*"
+zone_name = "example.org"
+
+[vars]
+RELAY_CANONICAL = "https://relay.example.com"
+RELAY_ALIASES = "https://old-relay.example.com"

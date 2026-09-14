@@ -903,8 +903,10 @@ const rootNames = (await (await fetch(`${RELAY}/`, { headers: { accept: "applica
 expect(rootNames.canonical === RELAY && (rootNames.aliases ?? []).includes(altRelay), "GET / says which names are one relay (canonical + aliases)");
 const rcOk = spawnSync(process.execPath, [path.resolve("scripts/routes-check.mjs")], { encoding: "utf8" });
 expect(rcOk.status === 0, "routes-check: wrangler.toml declares every custom-domain route it serves");
-const rcBad = spawnSync(process.execPath, [path.resolve("scripts/routes-check.mjs")], { encoding: "utf8", env: { ...process.env, RELAY_CANONICAL: "https://can2cup.com", RELAY_ALIASES: "https://www.can2cup.com" } });
-expect(rcBad.status !== 0 && /routed but not declared/.test(rcBad.stderr), "routes-check fails the release when a served name is left undeclared");
+const rcEnv = { ...process.env }; delete rcEnv.RELAY_CANONICAL; delete rcEnv.RELAY_ALIASES; // the fixtures' own [vars], not an override
+const rcFix = spawnSync(process.execPath, [path.resolve("scripts/routes-check.mjs"), "--config", path.resolve("src/scripts/fixtures/routes-ok.toml")], { encoding: "utf8", env: rcEnv });
+const rcBad = spawnSync(process.execPath, [path.resolve("scripts/routes-check.mjs"), "--config", path.resolve("src/scripts/fixtures/routes-bad.toml")], { encoding: "utf8", env: rcEnv });
+expect(rcFix.status === 0 && rcBad.status !== 0 && /routed but not declared/.test(rcBad.stderr), "routes-check --config fails the release when a served name is left undeclared (fixtures, not the root config)");
 { const rj = path.join(ginaHome, "rooms.json"); const rooms = JSON.parse(fs.readFileSync(rj, "utf8")) as Record<string, { relay: string }>; rooms[ginaRoom].relay = altRelay; fs.writeFileSync(rj, JSON.stringify(rooms, null, 2)); }
 const aliasInvite = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "invite", ginaRoom], { env: ginaNoKey, encoding: "utf8" });
 const aliasLink = /(https?:\/\/\S+\/j\/\S+)/.exec(aliasInvite.stdout)?.[1] ?? "";

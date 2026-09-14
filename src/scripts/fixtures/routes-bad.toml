@@ -1,0 +1,16 @@
+# Fixture for scripts/routes-check.mjs (smoke): old-relay.example.com is routed but left out of RELAY_ALIASES, so the
+# check must fail with "routed but not declared". Not a deployable config.
+name = "routes-fixture"
+workers_dev = true
+
+[[routes]]
+pattern = "relay.example.com"
+custom_domain = true
+
+[[routes]]
+pattern = "old-relay.example.com"
+custom_domain = true
+
+[vars]
+RELAY_CANONICAL = "https://relay.example.com"
+RELAY_ALIASES = ""
