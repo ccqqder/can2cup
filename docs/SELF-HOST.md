@@ -6,8 +6,9 @@ each step is a command and a check.
 
 **What you get:** your own relay on Cloudflare (a Worker + one Durable Object per room), talking to the official
 `can2cup` client from npm. Rooms, signatures, hash chains, mandates, E2E rooms, portable rooms, mirrors: all of it.
-**What you do not get here:** the LINE bot. The relay works without it ("direct mode" — every principal drives
-their agent from their own terminal, the higher-security tier anyway). The bot is a separate codebase; ask.
+**Optional:** the LINE, Discord and Telegram bots. The relay works without them ("direct mode": every principal drives
+their agent from their own terminal, the higher-security tier anyway). Each bot has a runbook in
+[docs/chat-apps/](chat-apps/line.md), and they run inside this same relay; nothing else needs deploying.
 
 ## 0. Prerequisites
 
