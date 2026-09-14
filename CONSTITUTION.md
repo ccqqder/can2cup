@@ -1,14 +1,14 @@
-<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
 # A Constitution for Agents That Speak for People
 
-*Version 0.1 · draft · 2026-09-14 · dedicated to the public domain (CC0 1.0)*
+*Version 0.1 · draft · 2026-09-14 · CC BY 4.0*
 
 **English** · [繁體中文](docs/i18n/CONSTITUTION.zh-TW.md)
 
 ## Why this exists
 
-More and more people hand work to an AI agent, and before long the agent on one side will be talking to the agent on the other side: booking a table, negotiating a price, selling a second-hand pram, opening read access to a log. The transport for that is being standardised (A2A, MCP, and several private protocols). None of them says whose authority a message carries once it lands inside the other agent's context, or what a person keeps in their own hands after an agent starts speaking for them.
+More and more people hand work to an AI agent, and before long the agent on one side will be talking to the agent on the other side: booking a table, negotiating a price, selling a second-hand pram, opening read access to a log. The transport for that is being standardised (A2A, MCP, and several private protocols), mostly for agents inside and between companies, and a survey in September 2026 found no product that lets the agents of ordinary people talk to each other in the chat apps those people already use. None of those standards says whose authority a message carries once it lands inside the other agent's context, or what a person keeps in their own hands after an agent starts speaking for them.
 
 This text writes those rules down in plain language, so that a person can read them without reading any code, and a builder can implement them without using any particular code. It comes out of the [Parenting Agent essays](https://peachpitboat.com/posts/parenting-agent/) and out of can2cup, a reference implementation, but the Articles depend on neither. If a different tool meets them, that tool follows this constitution; if can2cup stops meeting one, it stops claiming that one.
 
@@ -143,10 +143,10 @@ Written down so that silence is not mistaken for an answer.
 
 ## About this text
 
-- **It belongs to no one.** It is dedicated to the public domain under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/): copy it, translate it, fork it, put it in a specification or a product, with or without credit. The model is the one USB and Linux followed. Intel made the USB patents royalty-free, and that is a large part of why every device ended up with the port, while a rule owned by one company is unlikely to be adopted by its competitors.
+- **No one owns it, and every copy points back.** It is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): copy it, translate it, adapt it, put it in a specification or a product, commercial or not, with no fee and no permission to ask. The one condition is credit: name the source, link to it, and say whether you changed it. Credit is asked for because the Articles are the short form, and the full argument (the cases, the experiments, the objections) lives in the essays, so a reader who meets a copy somewhere should be able to find the whole of it. The licence covers this text, not the rules in it: software or a protocol that follows the Articles is not a copy of the text and needs no credit. A credit line can be as short as *Based on "A Constitution for Agents That Speak for People", peachpitboat.com, CC BY 4.0.* The model is the one USB and Linux followed. Intel made the USB patents royalty-free, and that is a large part of why every device ended up with the port, while a rule owned by one company is unlikely to be adopted by its competitors.
 - **It is not a protocol.** It does not choose a wire format, a signature scheme or a transport. [Appendix B](#appendix-b--how-it-sits-on-existing-protocols) shows how it sits on A2A and MCP.
-- **Changing it.** Proposals come as public issues with the reasoning and, where possible, a counterexample. Article numbers are permanent: a removed Article retires its number, so "follows Article 8" never changes meaning. If an idea here already has an earlier name elsewhere, the earlier name is adopted.
-- **Versions.** 0.x while drafting; 1.0 once at least two independent implementations follow every Article.
+- **Changing it.** Proposals come as public issues with the reasoning and, where possible, a counterexample. Article numbers become permanent at 1.0: from then on a removed Article retires its number, so "follows Article 8" never changes meaning. Before 1.0 Articles may still be merged, split or renumbered, because the essays they are drawn from are still being revised. If an idea here already has an earlier name elsewhere, the earlier name is adopted.
+- **Versions.** 0.x while drafting, and 0.x follows the essays: when an essay is revised, the Articles drawn from it are revised to match. 1.0 once at least two independent implementations follow every Article.
 
 ---
 
@@ -219,7 +219,8 @@ Where can2cup falls short, its own documents say so: the chat-app path is unsign
 - Kang and Diponegoro (2026), [Governance Gaps in Agent Interoperability Protocols](https://arxiv.org/abs/2606.31498): a neighbouring argument that governance is a layer missing above MCP and A2A
 - [The inventor of USB didn't make a dime off it](https://finance.yahoo.com/news/guy-invented-usb-didn-t-170239132.html): on Intel keeping USB royalty-free
 - Anthropic (2026), *Project Deal*, as cited in the principal-collapse page
+- Product survey, September 2026: [LINE allows one Official Account per group chat](https://developers.line.biz/en/docs/messaging-api/group-chats/) · [Telegram bot-to-bot communication](https://core.telegram.org/bots/features) · [WhatsApp third-party agents are one-to-one only](https://9to5mac.com/2026/09/07/whatsapp-will-soon-let-users-chat-with-up-to-five-third-party-ai-agents/)
 
 ## History
 
-- **0.1 (2026-09-14)**: first draft, from the Parenting Agent series and the can2cup documents.
+- **0.1 (2026-09-14)**: first draft, drawn from the Parenting Agent series (before the author's own revision of those essays) and from the can2cup documents.
