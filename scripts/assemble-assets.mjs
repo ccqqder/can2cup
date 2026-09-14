@@ -89,6 +89,18 @@ if (fs.existsSync(DL)) {
   const files = walk(DL);
   for (const [rel, abs] of files) plan.set(`dl/${rel}`, { from: abs, origin: "dl" });
   const names = new Set(files.map(([rel]) => rel));
+  // The tarballs are gitignored while VERSION, VERSION.sha256 and the manifest are tracked: a fresh clone has the
+  // metadata without the file it describes, and the relay would advertise an install URL that answers 404.
+  const meta = ["VERSION", "VERSION.sha256", "manifest.json", "manifest.sig"].filter((n) => names.has(n));
+  if (meta.length && !names.has("can2cup.tgz")) refuse(`${DL} has ${meta.join(", ")} but no can2cup.tgz — the tarballs are not in git; fetch them with scripts/mirror-dl.mjs, or pass a --dl without install files`);
+  if (names.has("VERSION.sha256")) {
+    for (const l of fs.readFileSync(path.join(DL, "VERSION.sha256"), "utf8").split("\n").filter((x) => x.trim())) {
+      const m = /^([0-9a-f]{64}) {2}(\S+)\r?$/.exec(l);
+      if (!m) refuse(`${DL}/VERSION.sha256 has a malformed line`);
+      if (!names.has(m[2])) refuse(`${DL}/VERSION.sha256 lists ${m[2]}, which is not there`);
+      if (createHash("sha256").update(fs.readFileSync(path.join(DL, m[2]))).digest("hex") !== m[1]) refuse(`${DL}/${m[2]} does not match its line in VERSION.sha256`);
+    }
+  }
   if (!names.has("manifest.json") || !names.has("manifest.sig")) console.warn(`note: ${DL} has no signed manifest (manifest.json + manifest.sig) — clients will refuse \`can2cup upgrade\` from this relay`);
 } else if (opt("--dl")) refuse(`--dl ${DL} does not exist`);
 else console.warn(`note: ${DL} does not exist — no dl/ (install and upgrade files) in the output`);

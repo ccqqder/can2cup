@@ -32,9 +32,22 @@ export async function hasAsset(env: AssetsEnv, path: string): Promise<boolean> {
   return (await assetText(env, path)) !== null;
 }
 
-/** Whether this deployment mirrors the install files under /dl (mirror-dl puts them there; a fork may skip it). */
+const exists = new Map<string, { ok: boolean; at: number }>();
+
+/** Whether this deployment mirrors the install files under /dl (mirror-dl puts them there; a fork may skip it).
+ *  Asks for the tarball itself, body discarded: a fresh clone carries the tracked VERSION and manifest while the
+ *  gitignored .tgz is missing, and an install line pointing at it would be a 404. */
 export async function hasMirror(env: AssetsEnv): Promise<boolean> {
-  return hasAsset(env, "/dl/VERSION");
+  const path = "/dl/can2cup.tgz";
+  const hit = exists.get(path);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.ok;
+  let ok = false;
+  try {
+    const r = await env.ASSETS?.fetch(new Request(new URL(path, "https://assets.local")));
+    if (r) { ok = r.ok; await r.body?.cancel(); }
+  } catch { /* no assets binding (dev) */ }
+  exists.set(path, { ok, at: Date.now() });
+  return ok;
 }
 
 /** The install line to hand a person: this relay's mirror when it has one, the npm registry otherwise — a relay

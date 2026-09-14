@@ -39,6 +39,12 @@ const opt = (name) => {
 const VERSION = opt("--version") ?? usage("--version is required");
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(VERSION)) usage(`--version ${VERSION} is not a version`);
 const OUT = path.resolve(opt("--out") ?? usage("--out is required"));
+// <out> must hold exactly the verified layout: a leftover file would be published beside it unverified, and a
+// symlink would carry the write somewhere else.
+if (fs.existsSync(OUT) || (() => { try { return fs.lstatSync(OUT).isSymbolicLink(); } catch { return false; } })()) {
+  const st = fs.lstatSync(OUT);
+  if (st.isSymbolicLink() || !st.isDirectory() || fs.readdirSync(OUT).length) usage(`--out ${OUT} must be a new or empty directory`);
+}
 if (opt("--from-release") && opt("--from-relay")) usage("--from-release and --from-relay are alternatives");
 const REGISTRY = (opt("--registry") ?? "https://registry.npmjs.org").replace(/\/+$/, "");
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
