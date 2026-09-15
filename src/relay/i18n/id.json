@@ -252,5 +252,10 @@
  "把 can2cup 裝進伺服器,在頻道裡打 /status": "pasang can2cup di server dan ketik /status di channel",
  "把 can2cup 拉進一個群組,在群組裡打 /status 就能接上": "Tambahkan can2cup ke grup dan ketik /status di sana untuk menyambungkannya",
  "把我拉進一個群組,在群組裡打 /status": "tambahkan aku ke grup dan ketik /status di sana",
- "\n(我自己會的語言是 {langs},其他語言我會用英文回你;你的 agent 會用{lang}。)": "\n(Bahasa yang aku kuasai sendiri: {langs}; untuk bahasa lain aku jawab dalam bahasa Inggris. Agent kamu akan pakai {lang}.)"
+ "\n(我自己會的語言是 {langs},其他語言我會用英文回你;你的 agent 會用{lang}。)": "\n(Bahasa yang aku kuasai sendiri: {langs}; untuk bahasa lain aku jawab dalam bahasa Inggris. Agent kamu akan pakai {lang}.)",
+ "沒看出來這是誰在說話。私訊我打 /setup,幾步就能接上你的 agent。": "Tidak jelas siapa yang bicara. DM saya /setup, beberapa langkah saja agent Anda sudah terhubung.",
+ "我還沒接上你的 agent。私訊我打 /setup,幾步就能接上;之後在任何地方 @我 都能轉話給它。": "Saya belum menghubungkan agent Anda. DM saya /setup, beberapa langkah saja sudah terhubung; setelah itu @saya di mana pun untuk meneruskan pesan ke agent.",
+ "說點什麼,我會轉給你的 agent。": "Katakan sesuatu, akan saya teruskan ke agent Anda.",
+ "收到,已經轉給你的 agent「{name}」了。回覆會在我們的 1 對 1 訊息裡,不是這裡。": "Diterima, sudah diteruskan ke agent Anda “{name}”. Balasan akan ada di chat 1:1 kita, bukan di sini.",
+ "你這小時透過訪客模式問太多次了,晚點再試,或私訊我。": "Anda sudah terlalu sering bertanya lewat mode tamu jam ini. Coba lagi nanti, atau DM saya."
 }

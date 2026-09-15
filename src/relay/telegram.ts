@@ -22,6 +22,10 @@ import { normLang } from "../protocol/lang.js";
 const API = "https://api.telegram.org";
 export const TG_USER = "tg:u:";
 export const TG_CHAT = "tg:c:";
+/** v0.18.0: a guest-mode place (Bot API 10.0) — deliberately its own prefix, never TG_CHAT/TG_USER. Telegram's own
+ *  docs warn a guest chat id "may not coincide with other existing bot chats sharing the same identifier"; a
+ *  distinct namespace is what makes that collision impossible to route into a real, postable room by accident. */
+export const TG_GUEST = "tg:guest:";
 export const isTelegramId = (id: string | undefined): boolean => !!id && id.startsWith("tg:");
 /** Telegram's own limits: 4096 chars per message text, 64 bytes per callback_data, 1024 chars per photo caption. */
 const TEXT_MAX = 4000;
@@ -106,6 +110,21 @@ export class TelegramChannel implements Channel {
     if (!u) return false;
     return (!!this.botId && String(u.id) === this.botId) || (!!this.botUser && typeof u.username === "string" && u.username.toLowerCase() === this.botUser.toLowerCase());
   }
+  /** Cuts an @mention entity that names this bot (by @username, or by text_mention → user id) out of `text`. Shared
+   *  by ordinary messages and guest_message — both carry the same `entities` shape. */
+  private stripSelfMention(rawText: unknown, rawEntities: unknown): { text: string; mentioned: boolean } {
+    let text = typeof rawText === "string" ? rawText : "";
+    const ents: J[] = Array.isArray(rawEntities) ? rawEntities.filter((e): e is J => !!e && typeof e === "object") : [];
+    const cut: Array<[number, number]> = [];
+    for (const e of ents) {
+      if (typeof e.offset !== "number" || typeof e.length !== "number") continue;
+      if (e.type === "mention" && this.botUser && text.substr(e.offset, e.length).toLowerCase() === `@${this.botUser.toLowerCase()}`) cut.push([e.offset, e.length]);
+      else if (e.type === "text_mention" && this.isMe(e.user)) cut.push([e.offset, e.length]);
+    }
+    if (!cut.length) return { text, mentioned: false };
+    for (const [i, l] of cut.sort((a, b) => b[0] - a[0])) text = text.slice(0, i) + text.slice(i + l);
+    return { text, mentioned: true };
+  }
 
   // ---- inbound ------------------------------------------------------------------------------
   async verify(header: (n: string) => string | undefined): Promise<boolean> { return telegramVerify(this.env.TELEGRAM_WEBHOOK_SECRET, header); }
@@ -150,17 +169,8 @@ export class TelegramChannel implements Channel {
       if (Array.isArray(m.new_chat_members) && m.new_chat_members.some((x: J) => this.isMe(x))) return [{ ...base, kind: "join" }];
       if (m.left_chat_member && this.isMe(m.left_chat_member)) return [{ ...base, kind: "leave" }];
       if (typeof m.text !== "string") return place.kind === "group" ? [] : [{ ...base, kind: "media", media: m.photo ? "image" : m.sticker ? "sticker" : m.document ? "file" : m.voice || m.audio ? "audio" : "other" }];
-      let text: string = m.text;
-      let mentioned = false;
       // strip our own @mention and the "@bot" suffix on commands; note a reply to one of our messages as a mention
-      const ents: J[] = Array.isArray(m.entities) ? m.entities.filter(isObj) : [];
-      const cut: Array<[number, number]> = [];
-      for (const e of ents) {
-        if (typeof e.offset !== "number" || typeof e.length !== "number") continue;
-        if (e.type === "mention" && this.botUser && text.substr(e.offset, e.length).toLowerCase() === `@${this.botUser.toLowerCase()}`) cut.push([e.offset, e.length]);
-        else if (e.type === "text_mention" && this.isMe(e.user)) cut.push([e.offset, e.length]);
-      }
-      if (cut.length) { mentioned = true; for (const [i, l] of cut.sort((a, b) => b[0] - a[0])) text = text.slice(0, i) + text.slice(i + l); }
+      let { text, mentioned } = this.stripSelfMention(m.text, m.entities);
       if (this.isMe(m.reply_to_message?.from)) {
         mentioned = true;
         // an answer to a ForceReply prompt: the prompt's first line carries the prefix ("✍️ /a ")
@@ -200,6 +210,28 @@ export class TelegramChannel implements Channel {
       return [{ ...base, kind: "other" }]; // fl: was answered by the Worker hop; anything else is not ours
     }
 
+    // v0.18.0: guest mode (Bot API 10.0) — a single @mention/reply in a chat this bot is not a member of. Always
+    // one event, always cannotPost, always answered through `answerGuestQuery` (see `answerGuest` below), never
+    // `reply`/`push`. Someone must have typed our @username for this to fire at all (Telegram delivers it only on a
+    // mention or a reply to our own message), so `mentioned` is unconditionally true.
+    const gm: J | undefined = isObj(u.guest_message) ? u.guest_message : undefined;
+    if (gm) {
+      const qid = typeof gm.guest_query_id === "string" && gm.guest_query_id ? gm.guest_query_id : undefined;
+      const from: J | undefined = isObj(gm.from) ? gm.from : undefined;
+      if (!qid || !from || from.is_bot || !idStr(from.id)) return [];
+      const chat: J | undefined = isObj(gm.chat) ? gm.chat : undefined;
+      const cid = chat ? idStr(chat.id) : undefined;
+      if (!cid) return [];
+      const uid = TG_USER + idStr(from.id);
+      { const n = nameOf(from); if (n) this.remember(uid, n); }
+      const { text } = this.stripSelfMention(gm.text, gm.entities);
+      const place: Incoming["place"] = { channel: "telegram", kind: String(chat?.type ?? "") === "private" ? "dm" : "group", id: TG_GUEST + cid };
+      return [{
+        channel: "telegram", eventId, place, userId: uid, text: text.trim(), mentioned: true, kind: "text",
+        cannotPost: true, guestQueryId: qid, ...(typeof from.language_code === "string" ? { locale: from.language_code } : {}),
+      }];
+    }
+
     const cm: J | undefined = isObj(u.my_chat_member) ? u.my_chat_member : undefined;
     if (cm) {
       const from: J | undefined = isObj(cm.from) ? cm.from : undefined;
@@ -229,6 +261,22 @@ export class TelegramChannel implements Channel {
       const r = await this.sendOut(replyToken, m);
       if (!r.ok) throw new Error(`telegram reply ${r.status}: ${r.detail ?? ""}`);
     }
+  }
+
+  /** Guest mode's one reply (Bot API 10.0): `answerGuestQuery` takes an InlineQueryResult, not a chat id — there is
+   *  no place to `sendMessage` to. An "article" result whose `input_message_content` is the text is the plain-text
+   *  shape; Telegram renders it as the bot's own message in the chat the mention came from. */
+  async answerGuest(guestQueryId: string, text: string): Promise<{ ok: boolean; detail?: string }> {
+    if (!this.enabled) return { ok: false, detail: "telegram disabled" };
+    const body = (text || "…").slice(0, TEXT_MAX);
+    try {
+      const r = await this.api("answerGuestQuery", {
+        guest_query_id: guestQueryId,
+        result: { type: "article", id: "reply", title: body.split("\n")[0].slice(0, 64) || "…", input_message_content: { message_text: body } },
+      });
+      const v = await verdict(r);
+      return { ok: v.ok, detail: v.detail };
+    } catch (e) { return { ok: false, detail: e instanceof Error ? e.message : String(e) }; }
   }
 
   async push(to: string, msg: { text?: string; quick?: Quick[]; image?: string; sender?: string; card?: Card }): Promise<{ ok: boolean; status: number; detail?: string }> {

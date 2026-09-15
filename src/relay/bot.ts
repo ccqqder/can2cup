@@ -307,6 +307,25 @@ export async function handleText(inc: Incoming, api: BotApi, ctx: BotCtx): Promi
   return t(tr(L, "→ 已交給你的 agent。(/agent off 回到聊天)"));
 }
 
+/** v0.18.0: Telegram guest mode — `inc.guestQueryId` is set, `inc.cannotPost` is always true (there is no place to
+ *  push or reply to; the single answer goes back through `Channel.answerGuest`, wired in bridge.ts). Treated exactly
+ *  like a DM instruction, never a group one: a bound caller's words go to their OWN agent's inbox with no group id
+ *  attached (this "place" cannot be posted back to later, so it must never become the agent's `lastGroup`); an
+ *  unbound caller is pointed at /setup. The agent's real answer lands in the boss's own DM — not here, and not
+ *  edited into the guest reply (Telegram does not document that as safe to rely on). */
+export async function handleGuest(inc: Incoming, api: BotApi, ctx: BotCtx): Promise<Out[]> {
+  const a = new Api(api); const L = ctx.lang;
+  const uid = inc.userId;
+  if (!uid) return [{ text: tr(L, "沒看出來這是誰在說話。私訊我打 /setup,幾步就能接上你的 agent。") }];
+  const text = (inc.text ?? "").trim();
+  let info: J;
+  try { info = await a.user(uid); } catch { return [{ text: bridgeDown(L) }]; }
+  if (!info.bound) return [{ text: tr(L, "我還沒接上你的 agent。私訊我打 /setup,幾步就能接上;之後在任何地方 @我 都能轉話給它。") }];
+  if (!text) return [{ text: tr(L, "說點什麼,我會轉給你的 agent。") }];
+  try { await a.inbox(uid, text); } catch (err) { console.error(`guest inbox failed: ${err instanceof Error ? err.message : String(err)}`); return [{ text: bridgeDown(L) }]; }
+  return [{ text: tr(L, "收到,已經轉給你的 agent「{name}」了。回覆會在我們的 1 對 1 訊息裡,不是這裡。", { name: info.name || "?" }) }];
+}
+
 async function runCommand(head: string, rest: string, inc: Incoming, a: Api, ctx: BotCtx): Promise<Handled> {
   const v = ctx.vocab; const L = ctx.lang;
   const uid = inc.userId!;

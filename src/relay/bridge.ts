@@ -54,7 +54,7 @@ import { makeChannels, channelFor, channelNamed } from "./channels.js";
 import { tr } from "./i18n.js";
 import { safeLabel } from "../protocol/framing.js";
 import { hasAsset, hasMirror, installLine } from "./assets.js";
-import { type BotApi, type BotCtx, type Handled, BridgeError, SILENT, bridgeDown, GROUP_HELLO, nonTextReply, plainTextHint, WELCOME, chipsFor, handlePostback, handleText, isCommand } from "./bot.js";
+import { type BotApi, type BotCtx, type Handled, BridgeError, SILENT, bridgeDown, GROUP_HELLO, nonTextReply, plainTextHint, WELCOME, chipsFor, handlePostback, handleText, handleGuest, isCommand } from "./bot.js";
 
 export interface BridgeEnv {
   BRIDGE_KEY?: string;
@@ -711,6 +711,14 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
         out = await handlePostback(ev, api, ctx);
         break;
       case "text": {
+        // v0.18.0: Telegram guest mode. This never reaches replyOrPush — there is no reply token and no push target,
+        // only the one-shot answerGuestQuery — so it returns as soon as that single answer is sent.
+        if (ev.guestQueryId) {
+          const allowed = await this.guestMentionAllowed(ev.userId);
+          const guestOut = allowed ? await handleGuest(ev, api, ctx) : [{ text: tr(ctx.lang, "你這小時透過訪客模式問太多次了,晚點再試,或私訊我。") }];
+          await this.answerGuest(ev, ch, guestOut);
+          return;
+        }
         if (!isGroup && ev.userId) await ch.markRead?.(ev.userId);
         // v0.12.1: a Discord server that has the app only as a user install — the bot cannot post there later, so
         // wiring, /a and the rest would silently fail at the first push. Say what to do instead; /help still helps.
@@ -745,6 +753,28 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
       case "mech-nodeal": return tr(L, "密封競價無成交:買方出價低於賣方,雙方都不成交(房 {room} #{seq})", { room: v.room ?? "", seq: v.seq ?? "" });
       default: return undefined;
     }
+  }
+  /** v0.18.0: Telegram guest mode — the caller's own hourly cap, so a burst of @mentions cannot fill someone's inbox
+   *  or spend their agent's attention faster than a person typing DMs could. No `userId` (should not happen; the
+   *  adapter always sets one) fails open, same as the "who are you" reply `handleGuest` gives in that case. */
+  private async guestMentionAllowed(uid: string | undefined): Promise<boolean> {
+    if (!uid) return true;
+    const hk = `q:tgguest:${uid}:${new Date().toISOString().slice(0, 13)}`;
+    const used = (await this.get<number>(hk)) ?? 0;
+    if (used >= 20) return false;
+    await this.put(hk, used + 1);
+    return true;
+  }
+  /** v0.18.0: the single reply a guest-mode mention gets. Never `reply`/`push` — those need a chat id this event does
+   *  not reliably have one of (see `TG_GUEST`'s doc comment); `answerGuestQuery` is keyed by `guestQueryId` alone. */
+  private async answerGuest(ev: Incoming, ch: Channel, out: Out[]): Promise<void> {
+    if (!ev.guestQueryId || !ch.answerGuest) return;
+    const text = (out.map(outText).join("\n") || "…").slice(0, 4000);
+    // v0.18.0 (smoke): answerGuestQuery has no token in local dev, so — like every other reply — there is nothing a
+    // test can read back from Telegram itself. Recorded under the debug gate only, never in production (DEBUG_ROUTES unset there).
+    if (this.env.DEBUG_ROUTES === "1") await this.put(`gq:${ev.guestQueryId}`, { at: new Date().toISOString(), text });
+    try { const r = await ch.answerGuest(ev.guestQueryId, text); if (!r.ok) console.error(`answerGuest failed: ${r.detail ?? ""}`); }
+    catch (e) { console.error(`answerGuest: ${e instanceof Error ? e.message : String(e)}`); }
   }
   /** A place the bot can answer in but cannot post to later: the adapter that raised `cannotPost` says what to do. */
   private needInstall(ch: Channel, L: string): string {
@@ -2388,6 +2418,9 @@ export class BridgeDO extends DurableObject<BridgeEnv> {
     // production relay should expose to a leaked bot key. Off unless DEBUG_ROUTES=1 (set in .dev.vars, never in wrangler.toml).
     app.use("/bridge/debug/*", async (c, next) => { if (this.env.DEBUG_ROUTES !== "1") return c.json({ error: "not found" }, 404); await next(); });
     app.get("/bridge/debug/pushes", async (c) => c.json({ pushes: (await this.get<Pushed[]>("pushes")) ?? [] }));
+    // v0.18.0: Telegram guest mode's one answer never goes through the push log (it is answerGuestQuery, keyed by
+    // guest_query_id, not a place) — this is that same debug-only window, for the same reason.
+    app.get("/bridge/debug/guest/:qid", async (c) => c.json((await this.get<{ at: string; text: string }>(`gq:${c.req.param("qid")}`)) ?? null));
     // v0.11.0 (smoke, second opinion #1 and #3): a hostile relay rewriting a signed item's stored text, and a relay
     // "forgetting" a signed pause. Both must be harmless to a correct client; these let the suite prove it.
     app.post("/bridge/debug/inbox-tamper", async (c) => {

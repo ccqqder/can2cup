@@ -50,6 +50,11 @@ export interface Incoming {
   /** The channel can answer THIS event but cannot post to the place on its own (Discord: a server that installed
    *  the app for one user, without the bot). Group features that push later would fail; the console says so. */
   cannotPost?: boolean;
+  /** Telegram guest mode (Bot API 10.0) only: a single @mention/reply in a chat the bot may not be a member of.
+   *  Always paired with cannotPost=true. The ONE reply this event may get must go through `Channel.answerGuest`,
+   *  never `reply`/`push` — `place` here is best-effort and MUST NOT be treated as a postable room (the same numeric
+   *  chat id can, per Telegram's own docs, belong to an unrelated ordinary chat the bot already knows). */
+  guestQueryId?: string;
 }
 
 export interface Channel {
@@ -97,6 +102,9 @@ export interface Channel {
   /** What to tell a group where the bot can answer but cannot post later (`Incoming.cannotPost`). Channel-specific by
    *  nature (Discord: "install the app on the server"); a channel that never sets cannotPost needs none. */
   installHint?(lang: string): string | undefined;
+  /** Telegram guest mode only: the single answer to `Incoming.guestQueryId`. Other channels never set guestQueryId,
+   *  so their adapters need not implement this. */
+  answerGuest?(guestQueryId: string, text: string): Promise<{ ok: boolean; detail?: string }>;
 }
 
 /** Plain-text form of an Out, for logs and for channels without cards. */

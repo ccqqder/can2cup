@@ -39,6 +39,13 @@ function msg(text, where = "dm", extra = {}, id) {
 }
 const callback = (data, where = "dm") => update({ callback_query: { id: String(num()), from, chat_instance: "x", message: { message_id: num() % 100000, from: bot, chat: where === "dm" ? chatDm : chatGroup, date: 0, text: "…" }, data } });
 const member = (where, status) => update({ my_chat_member: { chat: where === "dm" ? chatDm : chatGroup, from, date: 0, old_chat_member: { user: bot, status: status === "member" ? "left" : "member" }, new_chat_member: { user: bot, status } } });
+// v0.18.0: a guest_message (Bot API 10.0) — always an @mention, so the entity is baked in the same way msg() does it
+// for an ordinary group mention. `qid` rides on the returned update so the caller can read the answer back by it.
+function guest(text, where = "dm", fromUser = from) {
+  const qid = `gq_${num()}`;
+  const u = update({ guest_message: { message_id: num() % 100000, guest_query_id: qid, from: fromUser, chat: where === "dm" ? chatDm : chatGroup, date: Math.floor(Date.now() / 1000), text: `@${BOT_USER} ${text}`, entities: [{ type: "mention", offset: 0, length: BOT_USER.length + 1 }] } });
+  return { u, qid };
+}
 const bridge = async (path, body, method = body ? "POST" : "GET") => (await fetch(`${RELAY}${path}`, { method, headers: { "content-type": "application/json", "x-parley-bridge-key": BRIDGE_KEY }, ...(body ? { body: JSON.stringify(body) } : {}) })).json();
 const seen = new Map();
 async function replies(to) {
@@ -55,6 +62,15 @@ async function send(body, to = U) {
   let out = [];
   for (let i = 0; i < 12 && !out.length; i++) { await sleep(250); out = await replies(to); }
   return { r, out };
+}
+/** guest_message's one answer never lands in /bridge/debug/pushes (it is answerGuestQuery, not a push to a place) —
+ *  read it back by guest_query_id from the dedicated debug route instead. */
+async function sendGuest({ u, qid }) {
+  const r = await post(u);
+  expect(r.status === 200, `200 for guest update ${u.update_id}`);
+  let g = null;
+  for (let i = 0; i < 12 && !g; i++) { await sleep(250); g = await bridge(`/bridge/debug/guest/${qid}`); }
+  return { r, out: g ? [g.text] : [] };
 }
 
 // 0. the endpoint itself
@@ -123,6 +139,20 @@ expect((await bridge(`/bridge/user/${U}`)).paused === true, "…and the bridge s
 expect(out.some((t) => t.includes("已恢復")), "/resume");
 ({ out } = await send(msg("/quota")));
 expect(out.some((t) => /本月 push:\d+/.test(t) && t.includes("沒有月上限")), "/quota shows this channel's own count and says it has no monthly allowance (that is LINE's)");
+
+// 3b. Telegram guest mode (v0.18.0): @mention in a chat/group this bot is not a member of
+({ out } = await sendGuest(guest("幫我問一下狀況")));
+expect(out.some((t) => t.includes("已經轉給你的 agent")), "guest mention from the bound Telegram user → forwarded to their own agent");
+{
+  const gi = await bridge(`/bridge/debug/inbox/${U}`);
+  expect(gi.items.some((i) => i.text.includes("幫我問一下狀況") && i.via === "telegram" && !i.group), "…lands in their own inbox exactly like a DM /a — no group id attached (guest chats are never postable rooms)");
+  expect(!gi.items.some((i) => i.text.includes(`@${BOT_USER}`)), "…and the leading @mention was stripped before reaching the agent");
+}
+const strangerFrom = { id: 2_000_000_000 + num() % 1_000_000_000, is_bot: false, first_name: "路人", username: "stranger", language_code: "zh-hant" };
+({ out } = await sendGuest(guest("你好", "dm", strangerFrom)));
+expect(out.some((t) => t.includes("還沒接上你的 agent")), "guest mention from an unbound stranger → pointed at /setup, nothing queued to anyone");
+({ out } = await sendGuest(guest("你好嗎", "group")));
+expect(out.some((t) => t.includes("已經轉給你的 agent")), "the same, in a group the bot is not a member of, works the same way (cannotPost never blocks it)");
 
 // 4. a group: the bot is added, /status@bot, the wire button, /a, quiet, ask
 ({ out } = await send(member("group", "member"), G));

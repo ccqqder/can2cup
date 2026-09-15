@@ -75,9 +75,11 @@ if (what === "show") {
 } else if (what === "app") {
   // setWebhook: the relay's /telegram/webhook, the secret the relay verifies (TELEGRAM_WEBHOOK_SECRET — the same value,
   // set as a wrangler secret first), and only the update types the adapter reads. Telegram validates the URL on the spot.
+  // guest_message (v0.18.0) only ever arrives once Guest Mode is turned on for this bot in @BotFather's Mini App —
+  // listing it here is harmless either way, it just means nothing is sent until that separate manual step is done.
   const secret = env.TELEGRAM_WEBHOOK_SECRET;
   if (!secret || !/^[A-Za-z0-9_-]{16,256}$/.test(secret)) { console.error(`${envFile}: TELEGRAM_WEBHOOK_SECRET required (16–256 chars of A-Za-z0-9_-; the same value as the wrangler secret)`); process.exit(2); }
-  const r = await api("setWebhook", { url: `${relay}/telegram/webhook`, secret_token: secret, allowed_updates: ["message", "callback_query", "my_chat_member"], drop_pending_updates: args.includes("--drop-pending"), max_connections: 20 });
+  const r = await api("setWebhook", { url: `${relay}/telegram/webhook`, secret_token: secret, allowed_updates: ["message", "callback_query", "my_chat_member", "guest_message"], drop_pending_updates: args.includes("--drop-pending"), max_connections: 20 });
   console.log(`setWebhook → ${r}; now:`, JSON.stringify(await api("getWebhookInfo")));
 } else if (what === "say" || what === "tap") {
   const secret = env.TELEGRAM_WEBHOOK_SECRET;

@@ -252,5 +252,10 @@
  "把 can2cup 裝進伺服器,在頻道裡打 /status": "install can2cup in a server and type /status in a channel",
  "把 can2cup 拉進一個群組,在群組裡打 /status 就能接上": "Add can2cup to a group and type /status there to connect it",
  "把我拉進一個群組,在群組裡打 /status": "add me to a group and type /status there",
- "\n(我自己會的語言是 {langs},其他語言我會用英文回你;你的 agent 會用{lang}。)": "\n(The languages I speak myself are {langs}; in any other I answer in English. Your agent will use {lang}.)"
+ "\n(我自己會的語言是 {langs},其他語言我會用英文回你;你的 agent 會用{lang}。)": "\n(The languages I speak myself are {langs}; in any other I answer in English. Your agent will use {lang}.)",
+ "沒看出來這是誰在說話。私訊我打 /setup,幾步就能接上你的 agent。": "Couldn't tell who's speaking. DM me /setup and your agent will be connected in a few steps.",
+ "我還沒接上你的 agent。私訊我打 /setup,幾步就能接上;之後在任何地方 @我 都能轉話給它。": "I haven't connected your agent yet. DM me /setup — a few steps and it's connected; after that, @mention me anywhere to pass a message to it.",
+ "說點什麼,我會轉給你的 agent。": "Say something and I'll pass it to your agent.",
+ "收到,已經轉給你的 agent「{name}」了。回覆會在我們的 1 對 1 訊息裡,不是這裡。": "Got it — passed to your agent “{name}”. The reply will be in our 1:1 chat, not here.",
+ "你這小時透過訪客模式問太多次了,晚點再試,或私訊我。": "You've asked too many guest-mode questions this hour. Try again later, or DM me."
 }
