@@ -1,6 +1,8 @@
 # Prior art — the neighbourhood, and what we reuse
 
-*Verified by reading the source, not the marketing page. Survey date 2026-09-07.*
+*Verified by reading the source, not the marketing page. Survey date 2026-09-07, with an
+addendum survey 2026-09-14 covering Glama and a partial dump of the official MCP registry
+(about 21,100 entries, stopped by a server error partway through — see §1a).*
 
 Two questions this page answers, in order:
 
@@ -28,6 +30,11 @@ one trust boundary, no adversarial interest; it is a concurrency problem, not th
 | **AgentCouch** | "binds each post to the authenticated account" | none (platform is the authority) | none | none | proprietary hosted, not inspectable |
 | **AgentDM** | account | none | none | Slack | proprietary hosted, paid |
 | **agentchat** | API key | none | none | none | archived 2026-07-26 |
+| **agent-comms-mcp** *(added 09-14)* | Okta OIDC for the human; HS256 agent JWT | none — server custody | held: a message that crosses an ownership boundary is diverted and only released on the owner's approval; approved bytes = held bytes | Okta web decision page, notifier plugin | MIT, self-hostable (Docker + Postgres, needs Okta) |
+| **Agenzax** *(added 09-14)* | device pairing keys, listing | none — E2E (RSA-OAEP/AES-GCM) is transport only | server-side hold-for-approval tiers; a hard hold fires while the owner is typing | web dashboard | client MIT; hub hosted only, no self-host |
+| **mingle-mcp** *(added 09-14)* | local ed25519, `~/.mingle/identity.json` | **yes** — every write is a signature over a JCS-canonical envelope | both humans approve the exact previewed content before it is signed, but the key lives in the agent's own MCP process, not a separate device | none — inside the agent's own chat | Apache-2.0, client only; server centralized at `api.aeoess.com` |
+| **xete-mcp** *(added 09-14)* | Solana keypair, `~/.xete/identity.json` | none for messages (E2E only); payments carry no signing code at all | the agent drafts an unsigned transaction; a human verifies it independently and signs it in their own wallet — payments only | none | MIT |
+| **agent-relay** *(added 09-14)* | `agentId:secret` bearer token | none — "signed agent identities are on the roadmap" | the agent asks its own human, who approves with a bearer token that is not bound to the contract bytes | **Telegram inline buttons**, console; Discord/Feishu/WeCom/QQ as text | MIT, self-hostable (Docker Compose) |
 
 Three corrections to the earlier version of this table, from reading the code:
 
@@ -45,14 +52,68 @@ Three corrections to the earlier version of this table, from reading the code:
 
 ### The line that actually separates can2cup
 
-Not encryption, not signing, not "rooms". It is this: **every other project on the list
-treats a message as delivered when it arrives.** can2cup treats a message that creates a
-commitment as *undelivered until a human signs it*. Nobody else has a gate — roomcomm can
-prove afterwards what was said, hauddy can prove who the connection was, and neither can
-stop an agent from agreeing to something its principal never authorised.
+**Correction, 2026-09-14.** The line used to read "every other project on the list treats a
+message as delivered when it arrives." That is no longer accurate — agent-comms-mcp and
+Agenzax both hold a message for approval before it is delivered, and mingle-mcp signs the
+exact bytes a human previewed. A fuller neighbourhood exists than the 09-07 survey found.
+See §1a for the honest version of this claim.
 
-That is the same claim as [principal collapse](./principal-collapse.md) PC-5, seen from the
-product side.
+Against the original seven, though, the line still holds: roomcomm can prove afterwards what
+was said, hauddy can prove who the connection was, and neither can stop an agent from
+agreeing to something its principal never authorised. That is the same claim as
+[principal collapse](./principal-collapse.md) PC-5, seen from the product side.
+
+---
+
+## 1a. Update, 2026-09-14: a wider neighbourhood, and what is actually still unique
+
+A second pass, this time against Glama's listings and a partial dump of the official MCP
+registry (method and coverage limits in the appendix), found five more projects worth a row
+in the table above, plus one unverified candidate (`aiim-mcp`, "a live network where agents
+chat and form companies" — found on the last scanned registry page, not read). Full source
+citations are in Appendix C.
+
+**Does anyone else hold a message for approval?** Yes. agent-comms-mcp diverts any message
+crossing an ownership boundary and releases the approved bytes unchanged; Agenzax does the
+same server-side, including a hard hold while the owner is mid-reply. Neither uses a
+signature — the hold is enforced by server custody (an Okta session, a hosted queue).
+
+**Does anyone sign the exact approved content?** mingle-mcp does, for introductions: the
+human previews a digest of the canonical envelope, then a second call carries the digest
+back and the key signs it. The weak point is where the key lives — inside the agent's own
+MCP process (`SECURITY.md:40`, "stored in plaintext"), not on a device the agent cannot
+reach. The signature proves the key was used, not that a human on a separate machine used it.
+
+**Does anyone bind a human-held key to one commitment, verifiable by a counterparty?**
+xete-mcp comes closest, for money only: the agent drafts an unsigned transaction and a human
+signs it independently in their own wallet, so the signature never passes through the
+agent's process at all. That is a stronger property than mingle-mcp's on custody, and it is
+scoped to payments, not messages.
+
+**So what remains unique to can2cup is the combination**, not any single piece:
+
+1. a signature from a **boss-held key** (not the agent process's own key, not a platform
+   session),
+2. **bound to one message hash** inside a **cross-owner** room (not scoped to payments or to
+   one enterprise's IdP),
+3. **verifiable by the counterparty** without trusting the relay, and
+4. **enforced** by the relay rather than left to the agent's discretion to ask.
+
+That is a real but narrower claim than the original "nobody else has a gate." Enterprise
+buyers already have agent-comms-mcp's Okta-custody version of a gate; what they would be
+buying from can2cup instead is the third and first properties — verifiability without
+trusting either party's IdP, and a key the platform never custodies.
+
+**On chat apps.** agent-relay puts a cross-machine, cross-owner approval behind Telegram
+inline buttons today — 0 stars, no signatures, the approval token is not bound to the
+contract bytes, but it exists. relayagents/relay does the same with Slack, inside one team.
+No project found puts a cross-owner approval behind **LINE** (§1a caveat: the registry scan
+is partial, see appendix). "Any chat app, no vendor lock-in" is not a real differentiator —
+most of this neighbourhood claims multi-harness support — but "chat apps carry no authority"
+still is, and it depends entirely on whether a tap on a LINE/Telegram button produces a
+signature made on the boss's own device rather than a token minted by the relay. can2cup's
+own chat-app path is unsigned by default today ([`TRUST.md`](./TRUST.md)); the claim is only
+true once `require_signed_principal` is on.
 
 ---
 
@@ -554,8 +615,44 @@ and on timestamps:
 can2cup does the same thing (`signingBytes`, `headSigningBytes`, `canon()`), so this is a gap we
 do **not** have. Recorded because "we checked and we're fine" is a useful survey result, and
 because the timestamp-rounding trap is one worth staying aware of.
+
 ---
 
+### 3.5 · Nine smaller ideas from the 2026-09-14 pass
+
+Each is one paragraph because the source is one function or one paragraph of README. All MIT
+or Apache-2.0.
+
+1. **A mechanical boundary classifier**, instead of trusting the agent to self-report "this is
+   a commitment." agent-comms-mcp's `plugins.py:365–433` decides risk from message type and
+   whether the recipients are a subset of the sender's own owners — an outage in that lookup
+   fails closed. Apply the same idea to deciding which can2cup message types need the gate.
+2. **An invite hold.** The same project's `models.py:602–611` holds a room-join because
+   accepting "grants full retroactive history read." can2cup should check the same thing
+   before a new member sees a room's backlog.
+3. **A stale-approval check.** `main.py:1210–1213`: if the target state moved between the gate
+   request and the human's tap, the hold resolves as `"stale"`, not applied. can2cup's
+   equivalent is the room head moving between a `can2cup_send` gate request and the boss's tap.
+4. **Never preview bytes that cannot be sent.** mingle's `build/canonical.js:26–33` runs
+   validation before the human ever sees a preview; their own bug report at `:146–151` is a
+   control-character case that slipped through when this order was reversed once.
+5. **A verifier independent of the drafter.** xete's rule (`README.md:67–70`): the human-facing
+   summary on an approval card must be re-derived from the envelope itself, never taken from
+   agent-supplied prose.
+6. **Approve is never an agent-callable tool.** Confirmed as already true for can2cup, and
+   worth keeping true: no `can2cup_*` tool should let an agent produce the boss's signature.
+7. **Peer-visible gate state.** agent-relay's README shows the counterparty "seen, waiting for
+   the boss" instead of silence. Cheap, and it is the difference between a slow gate and one
+   that looks broken.
+8. **Telegram's `callback_data` is 64 bytes.** If can2cup ever puts an approval button in
+   Telegram, carry a short token, not the message hash itself — agent-relay's workaround
+   (`src/notify.js:27–29`) is the reason to know this ahead of time.
+9. **"Owner is typing → agent stops."** Agenzax documents a real incident (`README.md:173–188`):
+   an agent replied mid-conversation while its own owner was typing a reply to the same
+   thread. The fix is a hard, server-enforced hold whenever the boss is composing in a room
+   can2cup already has open.
+
+---
 
 ## 4. What we deliberately do not reuse
 
@@ -585,6 +682,11 @@ Verified from the `LICENSE` file and the package manifest of each clone, not fro
 | roomcomm | **AGPL-3.0** + CLA, open-core with a paid commercial licence | Anton Mannov | **no** | yes, freely |
 | agentpub | MIT *declared in `pyproject.toml` only* — **no `LICENSE` file in the repo** | not stated anywhere | risky — see below | yes, freely |
 | AgentCouch · AgentDM | proprietary, hosted | — | no | yes, freely |
+| agent-comms-mcp | MIT | Redesign Health | yes | yes, freely |
+| mingle-mcp / agent-passport-mcp | Apache-2.0 | aeoess | yes, with attribution | yes, freely |
+| xete-mcp | MIT | XETENET LLC | yes | yes, freely |
+| agent-relay | MIT | "Agent Relay contributors" | yes | yes, freely |
+| Agenzax (client only; hub is hosted, not published) | client MIT | Agenzax | yes (client) | yes, freely |
 
 ### The rule that covers most of this
 
@@ -670,6 +772,11 @@ Concrete, in order:
    is to what `close` means. Natural place to bind the mandate hash too.
 6. **A drop endpoint on our own relay** (§3.3) when a credential handover is first needed —
    not before, and not as a third-party dependency.
+7. **Claim the Glama listing** (§1a appendix) — it already exists, unclaimed, with no official
+   badge; hauddy has one. Do this alongside the registry entry, not instead of it.
+8. **Resolve the `io.idntty/parley` name collision** — a Glama connector named "Parley" (can2cup's
+   old project name), status unhealthy, exists only on Glama, not in the official registry.
+   Check whether it is a stale can2cup deployment before assuming it is unrelated.
 
 A licence only has to exist when the repo goes public; when that day comes, Apache-2.0 is the
 precedent that fits (hauddy, same shape: self-hostable hub + client, permissive, patent grant,
@@ -726,3 +833,27 @@ Beyond the licence/claim evidence above, the mechanics in §3 came from these:
 | SSE receiver: backoff, `?since=`, `--min-priority`, `--heartbeat`, `receiver_command` | `apuchat-cli/src/listen-here.ts` (header block) |
 | four canonical surfaces, `handshake_surface`, timestamp canonicalisation | `roomcomm/app/pcis.py` |
 | verdict rule, INCONCLUSIVE handling, coverage counters | `roomcomm/app/main.py:1226–1380` |
+
+### Appendix C — sources for §1a (2026-09-14 addendum)
+
+Clones taken 2026-09-14. Method and coverage limits: Glama HTML search returns ~20 results per
+query and its API needs a key we did not use; the official registry's paginated dump stopped
+at HTTP 500 on page 212, covering roughly 21,100 entries alphabetically through
+`io.github.mimo-3/…` — `com.can2cup/*`, `hauddy` and `idntty` all fall inside that range and
+are confirmed absent, but names after `io.github.n…` were never scanned.
+
+| claim | source |
+|---|---|
+| can2cup listed on Glama, unclaimed, no official badge | `glama.ai/mcp/servers/ccqqder/can2cup` |
+| `io.idntty/parley` connector, status unhealthy | Glama connector page, curl 2026-09-14 |
+| `aiim-mcp`, unverified | registry dump, last scanned pages, `io.github.lordbasilaiassistant-sudo/aiim-mcp` |
+| agent-comms-mcp boundary classifier | `plugins.py:76,365–433` |
+| agent-comms-mcp invite hold | `models.py:602–611` |
+| agent-comms-mcp stale-approval resolution | `main.py:1210–1213`; fingerprint at `models.py:764–767` |
+| agent-comms-mcp approval gate is an Okta session, not a signature | `main.py:1283–1293`; owner snapshot `models.py:612–620` |
+| mingle-mcp exact-bytes-then-sign flow | `README.md:41–44,91,129–130`; `build/canonical.js:9–16,26–33,223–241` |
+| mingle-mcp key lives in the agent's own process | `SECURITY.md:40,45` |
+| xete-mcp human signs independently in their own wallet | `README.md:54–56,67–70`; `src/xete_mcp/draft.py:1–18` |
+| agent-relay Telegram approval is a bearer token, not a signature | `src/store.js:407–408,497–500,516`; `src/notify.js:14–29,43–46`; `README.en.md:109–114,236` |
+| Agenzax server-side hold and the "owner is typing" incident | `README.md:37,93,124,173–188` (README only, not cloned) |
+| hauddy re-verified unchanged at v0.1.18/v0.1.19 | `packages/protocol/src/envelope.ts:34,38`; `packages/hub/src/server.ts:487–509`; `docs/harness-shims/generic-mcp.md:26`; HEAD `e19ab47` 2026-09-13 |
