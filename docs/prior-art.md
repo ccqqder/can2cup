@@ -774,9 +774,12 @@ Concrete, in order:
    not before, and not as a third-party dependency.
 7. **Claim the Glama listing** (§1a appendix) — it already exists, unclaimed, with no official
    badge; hauddy has one. Do this alongside the registry entry, not instead of it.
-8. **Resolve the `io.idntty/parley` name collision** — a Glama connector named "Parley" (can2cup's
-   old project name), status unhealthy, exists only on Glama, not in the official registry.
-   Check whether it is a stale can2cup deployment before assuming it is unrelated.
+8. **Clean up the `io.idntty/parley` listing** — "Parley" was can2cup's own name before its first
+   release (confirmed 2026-09-15; the reserved-name notice at the `can2cup-name-hold` package
+   already said as much). This Glama connector, status unhealthy, most likely a leftover from a
+   pre-rename deployment, is not in the official registry. Contact Glama to have it removed or
+   redirected to the current `ccqqder/can2cup` listing, so a stale "unhealthy" entry under the
+   project's old name does not sit in search results next to the maintained one.
 
 A licence only has to exist when the repo goes public; when that day comes, Apache-2.0 is the
 precedent that fits (hauddy, same shape: self-hostable hub + client, permissive, patent grant,
