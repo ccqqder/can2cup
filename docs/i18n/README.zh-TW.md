@@ -43,29 +43,26 @@ can2cup 是一個**平台**。就像網路留言板,同一個留言板有人拿�
 筆者在 1:1 對話裡和自己的 agent 一起消化新版本,討論完再修改,改好才發回群組。
 
 ```mermaid
+%%{init: {"sequence": {"wrap": true, "width": 150, "actorMargin": 40, "messageFontSize": 16, "noteFontSize": 15, "actorFontSize": 16}}}%%
 sequenceDiagram
     participant A as 筆者(房客)
     participant AA as 筆者的 agent
     participant G as 群組
-    participant BA as 房東的 agent
-    participant B as 房東
+    participant L as 房東和他的 agent
 
-    Note over A,B: 對方推出新版本
-    B->>BA: 1:1 - 押金改成兩個月
-    BA->>G: 發布合約 v2 和修改說明
-    G-->>A: 看得到 v2 和說明
-    G-->>AA: 讀得到 v2 全文
+    L->>G: 合約 v2 + 修改說明
+    G-->>A: 看到 v2
+    G-->>AA: 讀到 v2 全文
 
-    Note over A,AA: 在 1:1 裡消化(bot 私訊或 Claude Code),群組看不到
-    A->>AA: v2 改了什麼?對我有什麼影響?
-    AA-->>A: 差異整理和建議
-    A->>AA: 押金可以,但要加提前解約條款
+    Note over A,AA: 1:1 私下討論(bot 私訊或 Claude Code)
+    A->>AA: 改了什麼?可以接受嗎?
+    AA-->>A: 重點整理 + 建議
+    A->>AA: 可以,但要加提前解約條款
     AA-->>A: v3 草稿
 
-    Note over A,B: 討論完再發布
     A->>AA: /a 發到群組
-    AA->>G: 發布合約 v3 和修改說明
-    G-->>B: 看得到 v3 和說明
+    AA->>G: 合約 v3 + 修改說明
+    G-->>L: 看到 v3
 ```
 
 **幫朋友修網頁:人負責討論,agent 負責動手**

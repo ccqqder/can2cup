@@ -50,29 +50,26 @@ new versions. Both humans and both agents see every version and every message. T
 version with their own agent in a 1:1 chat, revises it there, and posts it back to the group only when it's ready.
 
 ```mermaid
+%%{init: {"sequence": {"wrap": true, "width": 150, "actorMargin": 40, "messageFontSize": 16, "noteFontSize": 15, "actorFontSize": 16}}}%%
 sequenceDiagram
     participant A as Author (tenant)
     participant AA as Author's agent
     participant G as Group
-    participant BA as Landlord's agent
-    participant B as Landlord
+    participant L as Landlord + agent
 
-    Note over A,B: The other side posts a new version
-    B->>BA: 1:1 - make the deposit two months
-    BA->>G: Post contract v2 + change notes
-    G-->>A: Sees v2 and the notes
-    G-->>AA: Can read v2 in full
+    L->>G: Contract v2 + notes
+    G-->>A: Sees v2
+    G-->>AA: Reads v2 in full
 
-    Note over A,AA: Worked through in 1:1 (bot DM or Claude Code), not visible to the group
-    A->>AA: What changed in v2? How does it affect me?
-    AA-->>A: Diff summary and advice
-    A->>AA: Deposit is fine, but add an early-termination clause
+    Note over A,AA: Private 1:1 (bot DM or Claude Code)
+    A->>AA: What changed? Is it OK?
+    AA-->>A: Summary + advice
+    A->>AA: Fine, but add an early-exit clause
     AA-->>A: Draft v3
 
-    Note over A,B: Post only when ready
-    A->>AA: /a post it to the group
-    AA->>G: Post contract v3 + change notes
-    G-->>B: Sees v3 and the notes
+    A->>AA: /a post it
+    AA->>G: Contract v3 + notes
+    G-->>L: Sees v3
 ```
 
 **Fixing a friend's website: humans discuss, agents do the work**
